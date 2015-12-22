@@ -1,7 +1,7 @@
 //---------------------------------------------------------------------------------------------------------------------------------
-// File: core_init.cpp
+// File: core_stream.cpp
 //
-// Contents: common initialization routines shared by PDO and sqlsrv
+// Contents: Implementation of PHP streams for reading SQL Server data
 //
 // Microsoft Drivers 3.2 for PHP for SQL Server
 // Copyright(c) Microsoft Corporation
@@ -19,11 +19,14 @@
 
 #include "core_sqlsrv.h"
 
-
 // module global variables (initialized in minit and freed in mshutdown)
 HMODULE g_sqlsrv_hmodule = NULL;
+//PHP7 Port
+// GetVersionExA is deprecated , causing a compilation error in release mode
+// as SDL check is on in our build
+#if PHP_MAJOR_VERSION < 7
 OSVERSIONINFO g_osversion;
-
+#endif
 
 // core_sqlsrv_minit
 // Module initialization
@@ -46,12 +49,16 @@ void core_sqlsrv_minit( sqlsrv_context** henv_cp, sqlsrv_context** henv_ncp, err
 
     // get the version of the OS we're running on.  For now this governs certain flags used by
     // WideCharToMultiByte.  It might be relevant to other things in the future.
-    g_osversion.dwOSVersionInfoSize = sizeof( g_osversion );
+    
+	//PHP7 Port
+#if PHP_MAJOR_VERSION < 7
+	g_osversion.dwOSVersionInfoSize = sizeof(g_osversion);
     BOOL ver_return = GetVersionEx( &g_osversion );
     if( !ver_return ) {
         LOG( SEV_ERROR, "Failed to retrieve Windows version information." );
         throw core::CoreException();
     }
+#endif
 
     SQLHANDLE henv = SQL_NULL_HANDLE;
     SQLRETURN r;
@@ -155,9 +162,7 @@ void core_sqlsrv_mshutdown( sqlsrv_context& henv_cp, sqlsrv_context& henv_ncp )
     return;
 }
 
-
 // DllMain for the extension.  
-
 BOOL WINAPI DllMain( HINSTANCE hinstDLL, DWORD fdwReason, LPVOID )
 {
     switch( fdwReason ) {

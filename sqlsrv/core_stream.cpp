@@ -16,9 +16,9 @@
 //  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS 
 //  IN THE SOFTWARE.
 //---------------------------------------------------------------------------------------------------------------------------------
-
 #include "core_sqlsrv.h"
 #include <windows.h>
+#include <VersionHelpers.h>
 
 namespace {
 
@@ -51,7 +51,7 @@ int sqlsrv_stream_close( php_stream* stream, int /*close_handle*/ TSRMLS_DC )
 size_t sqlsrv_stream_read( php_stream* stream, __out_bcount(count) char* buf, size_t count TSRMLS_DC )
 {
    
-    SQLINTEGER read = 0;
+    SQLLEN read = 0;
     SQLSMALLINT c_type = SQL_C_CHAR;
     char* get_data_buffer = buf;
     sqlsrv_malloc_auto_ptr<char> temp_buf;
@@ -154,7 +154,20 @@ size_t sqlsrv_stream_read( php_stream* stream, __out_bcount(count) char* buf, si
             DWORD flags = 0;
 
             // convert to UTF-8
-            if( g_osversion.dwMajorVersion >= SQLSRV_OS_VISTA_OR_LATER ) {
+			//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+			auto isVistaOrLater = []() -> bool
+							{
+								OSVERSIONINFOEX osvi = { 0 };
+								osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
+								osvi.dwMajorVersion = SQLSRV_OS_VISTA_OR_LATER;
+								return (::VerifyVersionInfo(&osvi, VER_MAJORVERSION, 0))?true:false;
+							};
+			if (isVistaOrLater() )
+#else
+            if( g_osversion.dwMajorVersion >= SQLSRV_OS_VISTA_OR_LATER ) 
+#endif
+			{
                 // Vista (and later) will detect invalid UTF-16 characters and raise an error.
                 flags = WC_ERR_INVALID_CHARS;
             }
@@ -200,9 +213,13 @@ php_stream_ops sqlsrv_stream_ops = {
 // open a stream and return the sqlsrv_stream_ops function table as part of the
 // return value.  There is only one valid way to open a stream, using sqlsrv_get_field on
 // certain field types.  A sqlsrv stream may only be opened in read mode.
-#if PHP_MAJOR_VERSION == 5 && PHP_MINOR_VERSION >= 6
-static php_stream* sqlsrv_stream_opener( php_stream_wrapper* wrapper, __in const char*, __in const char* mode, 
-                                         int options, __in char **, php_stream_context* STREAMS_DC TSRMLS_DC )
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+static php_stream* sqlsrv_stream_opener(php_stream_wrapper* wrapper, const char*, const char* mode,
+	int options, zend_string **, php_stream_context* STREAMS_DC TSRMLS_DC)
+#elif PHP_VERSION_ID >= 50600
+static php_stream* sqlsrv_stream_opener( php_stream_wrapper* wrapper, const char*, const char* mode, 
+                                         int options, char **, php_stream_context* STREAMS_DC TSRMLS_DC )
 #else
 static php_stream* sqlsrv_stream_opener( php_stream_wrapper* wrapper, __in char*, __in char* mode, 
                                          int options, __in char **, php_stream_context* STREAMS_DC TSRMLS_DC )

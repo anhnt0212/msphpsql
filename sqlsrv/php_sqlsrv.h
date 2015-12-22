@@ -73,7 +73,9 @@ typedef int socklen_t;
 
 #pragma warning(pop)
 
-#if PHP_MAJOR_VERSION > 5 || PHP_MAJOR_VERSION < 5 || ( PHP_MAJOR_VERSION == 5 && PHP_MINOR_VERSION < 3 )
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+#elif PHP_MAJOR_VERSION != 5 || PHP_MINOR_VERSION < 3 // || PHP_MAJOR_VERSION < 5 || ( PHP_MAJOR_VERSION == 5 && PHP_MINOR_VERSION < 2 ) || ( PHP_MAJOR_VERSION == 5 && PHP_MINOR_VERSION > 3 )
 #error Trying to compile "Microsoft Drivers for PHP for SQL Server (SQLSRV Driver)" with an unsupported version of PHP
 #endif
 
@@ -148,7 +150,12 @@ struct ss_sqlsrv_conn : sqlsrv_conn
 };
 
 // resource destructor
-void __cdecl sqlsrv_conn_dtor( zend_rsrc_list_entry *rsrc TSRMLS_DC );
+#if PHP_MAJOR_VERSION >= 7
+void __cdecl sqlsrv_conn_dtor(zend_resource *rsrc TSRMLS_DC);
+#else
+void __cdecl sqlsrv_conn_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC);
+#endif
+
 
 //*********************************************************************************************************************************
 // Statement
@@ -223,7 +230,16 @@ PHP_FUNCTION(sqlsrv_rows_affected);
 PHP_FUNCTION(sqlsrv_send_stream_data);
 
 // resource destructor
-void __cdecl sqlsrv_stmt_dtor( zend_rsrc_list_entry *rsrc TSRMLS_DC );
+
+
+// resource destructor
+
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+void __cdecl sqlsrv_stmt_dtor(zend_resource *rsrc TSRMLS_DC);
+#else
+void __cdecl sqlsrv_stmt_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC);
+#endif
 
 // "internal" statement functions shared by functions in conn.cpp and stmt.cpp
 void bind_params( ss_sqlsrv_stmt* stmt TSRMLS_DC );
@@ -380,29 +396,47 @@ bool handle_error( sqlsrv_context const* ctx, int log_subsystem, const char* fun
                    sqlsrv_error const* ssphp TSRMLS_DC, ... );
 void handle_warning( sqlsrv_context const* ctx, int log_subsystem, const char* function, 
                      sqlsrv_error const* ssphp TSRMLS_DC, ... );
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+void __cdecl sqlsrv_error_dtor(zend_resource *rsrc TSRMLS_DC);
+#else
 void __cdecl sqlsrv_error_dtor( zend_rsrc_list_entry *rsrc TSRMLS_DC );
+#endif
 
 // release current error lists and set to NULL
 inline void reset_errors( TSRMLS_D )
 {
-    if( Z_TYPE_P( SQLSRV_G( errors )) != IS_ARRAY && Z_TYPE_P( SQLSRV_G( errors )) != IS_NULL ) {
-        DIE( "sqlsrv_errors contains an invalid type" );
-    }
-    if( Z_TYPE_P( SQLSRV_G( warnings )) != IS_ARRAY && Z_TYPE_P( SQLSRV_G( warnings )) != IS_NULL ) {
-        DIE( "sqlsrv_warnings contains an invalid type" );
-    }
+	if (Z_TYPE_P(SQLSRV_G(errors)) != IS_ARRAY && Z_TYPE_P(SQLSRV_G(errors)) != IS_NULL)
+	{
+		DIE("sqlsrv_errors contains an invalid type");
+	}
+	if (Z_TYPE_P(SQLSRV_G(warnings)) != IS_ARRAY && Z_TYPE_P(SQLSRV_G(warnings)) != IS_NULL) {
+		DIE("sqlsrv_warnings contains an invalid type");
+	}
 
-    if( Z_TYPE_P( SQLSRV_G( errors )) == IS_ARRAY ) {
-        zend_hash_destroy( Z_ARRVAL_P( SQLSRV_G( errors )));
-        FREE_HASHTABLE( Z_ARRVAL_P( SQLSRV_G( errors )));
-    }
-    if( Z_TYPE_P( SQLSRV_G( warnings )) == IS_ARRAY ) {
-        zend_hash_destroy( Z_ARRVAL_P( SQLSRV_G( warnings )));
-        FREE_HASHTABLE( Z_ARRVAL_P( SQLSRV_G( warnings )));
-    }
+#if PHP_MAJOR_VERSION >= 7
+	if (Z_TYPE_P(SQLSRV_G(errors)) == IS_ARRAY) 
+	{
+		zend_hash_destroy(Z_ARRVAL_P(SQLSRV_G(errors)));
+		FREE_HASHTABLE(Z_ARRVAL_P(SQLSRV_G(errors)));
+	}
+	if (Z_TYPE_P(SQLSRV_G(warnings)) == IS_ARRAY) {
+		zend_hash_destroy(Z_ARRVAL_P(SQLSRV_G(warnings)));
+		FREE_HASHTABLE(Z_ARRVAL_P(SQLSRV_G(warnings)));
+	}
+#else
+	if (Z_TYPE_P(SQLSRV_G(errors)) == IS_ARRAY) {
+		zend_hash_destroy(Z_ARRVAL_P(SQLSRV_G(errors)));
+		FREE_HASHTABLE(Z_ARRVAL_P(SQLSRV_G(errors)));
+	}
+	if (Z_TYPE_P(SQLSRV_G(warnings)) == IS_ARRAY) {
+		zend_hash_destroy(Z_ARRVAL_P(SQLSRV_G(warnings)));
+		FREE_HASHTABLE(Z_ARRVAL_P(SQLSRV_G(warnings)));
+	}
+#endif
 
-    ZVAL_NULL( SQLSRV_G( errors ));
-    ZVAL_NULL( SQLSRV_G( warnings ));
+	ZVAL_NULL(SQLSRV_G(errors));
+	ZVAL_NULL(SQLSRV_G(warnings));
 }
 
 #define THROW_SS_ERROR( ctx, error_code, ... ) \
@@ -414,13 +448,11 @@ class sqlsrv_context_auto_ptr : public sqlsrv_auto_ptr< sqlsrv_context, sqlsrv_c
 
 public:
 
-    sqlsrv_context_auto_ptr( void ) :
-        sqlsrv_auto_ptr<sqlsrv_context, sqlsrv_context_auto_ptr >( NULL )
+    sqlsrv_context_auto_ptr( ) : sqlsrv_auto_ptr<sqlsrv_context, sqlsrv_context_auto_ptr >( )
     {
     }
 
-    sqlsrv_context_auto_ptr( const sqlsrv_context_auto_ptr& src ) :
-        sqlsrv_auto_ptr< sqlsrv_context, sqlsrv_context_auto_ptr >( src )
+    sqlsrv_context_auto_ptr( const sqlsrv_context_auto_ptr& src ) : sqlsrv_auto_ptr< sqlsrv_context, sqlsrv_context_auto_ptr >( src )
     {
     }
 
@@ -434,16 +466,16 @@ public:
         _ptr = ptr;
     }
 
-    sqlsrv_context* operator=( sqlsrv_context* ptr )
+    sqlsrv_context_auto_ptr &operator=( sqlsrv_context* ptr )
     {
-        return sqlsrv_auto_ptr< sqlsrv_context, sqlsrv_context_auto_ptr >::operator=( ptr );
+        sqlsrv_auto_ptr< sqlsrv_context, sqlsrv_context_auto_ptr >::operator=( ptr );
+		return *this;
     }
 
-    void operator=( sqlsrv_context_auto_ptr& src )
+    sqlsrv_context_auto_ptr &operator=( const sqlsrv_context_auto_ptr& src )
     {
-        sqlsrv_context* p = src.get();
-        src.transferred();
-        this->_ptr = p;
+		sqlsrv_auto_ptr< sqlsrv_context, sqlsrv_context_auto_ptr >::operator=( src );
+		return *this;
     }
 };
 
@@ -480,13 +512,19 @@ struct CheckMemory {
     CheckMemory( void )
     {
         // test the integrity of the Zend heap.
-        full_mem_check(MEMCHECK_SILENT);
+		//PHP7 Port
+#if PHP_MAJOR_VERSION < 7 
+		full_mem_check(MEMCHECK_SILENT);
+#endif
     }
 
     ~CheckMemory( void )
     {
         // test the integrity of the Zend heap.
-        full_mem_check(MEMCHECK_SILENT);
+		//PHP7 Port
+#if PHP_MAJOR_VERSION < 7 
+		full_mem_check(MEMCHECK_SILENT);
+#endif
     }
 };
 
@@ -500,10 +538,14 @@ struct CheckMemory {
 template <typename H>
 inline H* process_params( INTERNAL_FUNCTION_PARAMETERS, char const* param_spec, const char* calling_func, int param_count, ... )
 {
-    SQLSRV_UNUSED( return_value_used );
-    SQLSRV_UNUSED( this_ptr );
-    SQLSRV_UNUSED( return_value_ptr );
-    SQLSRV_UNUSED( return_value );
+	//PHP7 Port
+#if PHP_MAJOR_VERSION < 7
+	SQLSRV_UNUSED(return_value_used);
+	SQLSRV_UNUSED(this_ptr);
+	SQLSRV_UNUSED(return_value_ptr);
+	SQLSRV_UNUSED(return_value);
+#endif
+    
 
     zval* rsrc;
     H* h;
@@ -511,10 +553,20 @@ inline H* process_params( INTERNAL_FUNCTION_PARAMETERS, char const* param_spec, 
     // reset the errors from the previous API call
     reset_errors( TSRMLS_C );
 
-    if( ZEND_NUM_ARGS() > param_count + 1 ) {
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	if (ZEND_NUM_ARGS() > (unsigned int) param_count + 1)
+	{
+		DIE("Param count and argument count don't match.");
+		return NULL;    // for static analysis tools
+	}
+#else
+    if( ZEND_NUM_ARGS() > param_count + 1 ) 
+	{
         DIE( "Param count and argument count don't match." );
         return NULL;    // for static analysis tools
     }
+#endif
 
     try {
 
@@ -588,9 +640,15 @@ inline H* process_params( INTERNAL_FUNCTION_PARAMETERS, char const* param_spec, 
         }
 
         // get the resource registered 
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		h = static_cast<H*>(zend_fetch_resource(Z_RES_P(rsrc) TSRMLS_CC, H::resource_name, H::descriptor));
+#else
         h = static_cast<H*>( zend_fetch_resource( &rsrc TSRMLS_CC, -1, H::resource_name, NULL, 1, H::descriptor ));
+#endif
         
-        CHECK_CUSTOM_ERROR(( h == NULL ), &error_ctx, SS_SQLSRV_ERROR_INVALID_FUNCTION_PARAMETER, calling_func ) {
+        CHECK_CUSTOM_ERROR(( h == NULL ), &error_ctx, SS_SQLSRV_ERROR_INVALID_FUNCTION_PARAMETER, calling_func ) 
+		{
 
             throw ss::SSException();
         }
@@ -614,22 +672,41 @@ inline H* process_params( INTERNAL_FUNCTION_PARAMETERS, char const* param_spec, 
 //*********************************************************************************************************************************
 namespace ss {
 
-    // an error which occurred in our SQLSRV driver
-    struct SSException : public core::CoreException {
+	// an error which occurred in our SQLSRV driver
+	struct SSException : public core::CoreException {
 
-        SSException()
-        {
-        }
-    };
+		SSException()
+		{
+		}
+	};
 
-    inline void zend_register_resource( __out zval* rsrc_result, void* rsrc_pointer, int rsrc_type, char* rsrc_name TSRMLS_DC ) 
-    {
-        int zr = ZEND_REGISTER_RESOURCE( rsrc_result, rsrc_pointer, rsrc_type );
-        CHECK_CUSTOM_ERROR(( zr == FAILURE ), reinterpret_cast<sqlsrv_context*>( rsrc_pointer ), SS_SQLSRV_ERROR_REGISTER_RESOURCE,
-                           rsrc_name ) {
-            throw ss::SSException();
-        }
-    }
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	inline zend_resource* zend_register_resource( void* rsrc_pointer, int rsrc_type, char* rsrc_name)
+	{
+		auto ret = ::zend_register_resource(rsrc_pointer, rsrc_type);
+
+		if (ret == NULL)
+		{
+			throw ss::SSException();
+		}
+
+		return ret;
+	}
+#else
+	inline void zend_register_resource(__out zval* rsrc_result, void* rsrc_pointer, int rsrc_type, char* rsrc_name)
+	{
+		int zr = ZEND_REGISTER_RESOURCE(rsrc_result, rsrc_pointer, rsrc_type);
+		CHECK_CUSTOM_ERROR((zr == FAILURE), reinterpret_cast<sqlsrv_context*>(rsrc_pointer), SS_SQLSRV_ERROR_REGISTER_RESOURCE,
+			rsrc_name)
+		{
+			throw ss::SSException();
+		}
+	}
+
+#endif
+	
+
 } // namespace ss
 
 #endif	/* PHP_SQLSRV_H */

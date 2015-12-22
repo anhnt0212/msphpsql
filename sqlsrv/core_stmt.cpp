@@ -1,7 +1,7 @@
 //---------------------------------------------------------------------------------------------------------------------------------
-// File: core_stmt.cpp
+// File: core_stream.cpp
 //
-// Contents: Core routines that use statement handles shared between sqlsrv and pdo_sqlsrv
+// Contents: Implementation of PHP streams for reading SQL Server data
 //
 // Microsoft Drivers 3.2 for PHP for SQL Server
 // Copyright(c) Microsoft Corporation
@@ -16,8 +16,9 @@
 //  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS 
 //  IN THE SOFTWARE.
 //---------------------------------------------------------------------------------------------------------------------------------
-
+#include "zend_utility.h"
 #include "core_sqlsrv.h"
+
 
 namespace {
 
@@ -89,7 +90,12 @@ void default_sql_size_and_scale( sqlsrv_stmt* stmt, unsigned int paramno, zval* 
 // given a zval and encoding, determine the appropriate sql type, column size, and decimal scale (if appropriate)
 void default_sql_type( sqlsrv_stmt* stmt, unsigned int paramno, zval* param_z, SQLSRV_ENCODING encoding, 
                        __out SQLSMALLINT& sql_type TSRMLS_DC );
-void field_cache_dtor( void* data );
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+void field_cache_dtor( zval* data );
+#else
+void field_cache_dtor(void* data);
+#endif
 void finalize_output_parameters( sqlsrv_stmt* stmt TSRMLS_DC );
 void get_field_as_string( sqlsrv_stmt* stmt, SQLUSMALLINT field_index, sqlsrv_phptype sqlsrv_php_type, 
                           __out void** field_value, __out SQLLEN* field_len TSRMLS_DC );
@@ -103,9 +109,19 @@ void save_output_param_for_later( sqlsrv_stmt* stmt, sqlsrv_output_param& param 
 // send all the stream data 
 void send_param_streams( sqlsrv_stmt* stmt TSRMLS_DC );
 // called when a bound output string parameter is to be destroyed
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+void sqlsrv_output_param_dtor(zval* data);
+#else
 void sqlsrv_output_param_dtor( void* data );
+#endif
 // called when a bound stream parameter is to be destroyed.
-void sqlsrv_stream_dtor( void* data );
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+void sqlsrv_stream_dtor( zval* data );
+#else
+void sqlsrv_stream_dtor(void* data);
+#endif
 bool is_streamable_type( SQLINTEGER sql_type );
 
 }
@@ -131,33 +147,66 @@ sqlsrv_stmt::sqlsrv_stmt( sqlsrv_conn* c, SQLHANDLE handle, error_callback e, vo
     active_stream( NULL )
 {
     // initialize the input string parameters array (which holds zvals)
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	ALLOC_ZVAL(param_input_strings);
+#else
     MAKE_STD_ZVAL( param_input_strings );
+#endif
+
     core::sqlsrv_array_init( *conn, param_input_strings TSRMLS_CC );
         
     // initialize the (input only) stream parameters (which holds sqlsrv_stream structures)
-    MAKE_STD_ZVAL( param_streams );
-    Z_TYPE_P( param_streams ) = IS_ARRAY;
-    ALLOC_HASHTABLE( Z_ARRVAL_P( param_streams ));
-    core::sqlsrv_zend_hash_init( *conn, Z_ARRVAL_P( param_streams ), 5 /* # of buckets */, NULL /*hashfn*/, 
-                                 sqlsrv_stream_dtor, 0 /*persistent*/ TSRMLS_CC );
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	ALLOC_ZVAL(param_streams);
+	array_init(param_streams);
+	
+	core::sqlsrv_zend_hash_init(*conn, Z_ARRVAL_P(param_streams), 5 /* # of buckets */, NULL /*hashfn*/,
+		sqlsrv_stream_dtor, 0 /*persistent*/ TSRMLS_CC );
 
-    // initialize the (input only) datetime parameters of converted date time objects to strings
-    MAKE_STD_ZVAL( param_datetime_buffers );
-    array_init( param_datetime_buffers );
+	// initialize the (input only) datetime parameters of converted date time objects to strings
+	ALLOC_ZVAL(param_datetime_buffers);
+	array_init(param_datetime_buffers);
 
-    // initialize the output string parameters (which holds sqlsrv_output_param structures)
-    MAKE_STD_ZVAL( output_params );
-    Z_TYPE_P( output_params ) = IS_ARRAY;
-    ALLOC_HASHTABLE( Z_ARRVAL_P( output_params ));
-    core::sqlsrv_zend_hash_init( *conn, Z_ARRVAL_P( output_params ), 5 /* # of buckets */, NULL /*hashfn*/, 
-                                 sqlsrv_output_param_dtor, 0 /*persistent*/ TSRMLS_CC );
+	ALLOC_ZVAL(output_params);
+	array_init(output_params);
 
-    // initialize the field cache
-    MAKE_STD_ZVAL( field_cache );
-    Z_TYPE_P( field_cache ) = IS_ARRAY;
-    ALLOC_HASHTABLE( Z_ARRVAL_P( field_cache ));
-    core::sqlsrv_zend_hash_init( *conn, Z_ARRVAL_P( field_cache ), 5 /* # of buckets */, NULL /*hashfn*/, 
-                                 field_cache_dtor, 0 /*persistent*/ TSRMLS_CC );
+	core::sqlsrv_zend_hash_init(*conn, Z_ARRVAL_P(output_params), 5 /* # of buckets */, NULL /*hashfn*/,
+		sqlsrv_output_param_dtor, 0 /*persistent*/ TSRMLS_CC);
+
+	ALLOC_ZVAL(field_cache);
+	array_init(field_cache);
+
+	core::sqlsrv_zend_hash_init(*conn, Z_ARRVAL_P(field_cache), 5 /* # of buckets */, NULL /*hashfn*/,
+		field_cache_dtor, 0 /*persistent*/ TSRMLS_CC);
+#else
+	MAKE_STD_ZVAL(param_streams);
+	Z_TYPE_P(param_streams) = IS_ARRAY;
+
+	ALLOC_HASHTABLE(Z_ARRVAL_P(param_streams));
+	core::sqlsrv_zend_hash_init(*conn, Z_ARRVAL_P(param_streams), 5 /* # of buckets */, NULL /*hashfn*/,
+		sqlsrv_stream_dtor, 0 /*persistent*/ TSRMLS_CC);
+
+	// initialize the (input only) datetime parameters of converted date time objects to strings
+	MAKE_STD_ZVAL(param_datetime_buffers);
+	array_init(param_datetime_buffers);
+	MAKE_STD_ZVAL(output_params);
+	Z_TYPE_P(output_params) = IS_ARRAY;
+
+	ALLOC_HASHTABLE(Z_ARRVAL_P(output_params));
+	core::sqlsrv_zend_hash_init(*conn, Z_ARRVAL_P(output_params), 5 /* # of buckets */, NULL /*hashfn*/,
+		sqlsrv_output_param_dtor, 0 /*persistent*/ TSRMLS_CC);
+
+	MAKE_STD_ZVAL(field_cache);
+	Z_TYPE_P(field_cache) = IS_ARRAY;
+
+
+	ALLOC_HASHTABLE(Z_ARRVAL_P(field_cache));
+	core::sqlsrv_zend_hash_init(*conn, Z_ARRVAL_P(field_cache), 5 /* # of buckets */, NULL /*hashfn*/,
+		field_cache_dtor, 0 /*persistent*/ TSRMLS_CC);
+#endif
+
 }
 
 // desctructor for sqlsrv statement.
@@ -176,11 +225,21 @@ sqlsrv_stmt::~sqlsrv_stmt( void )
     }
 
     invalidate();
+
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	zval_ptr_dtor(param_input_strings);
+	zval_ptr_dtor(output_params);
+	zval_ptr_dtor(param_streams);
+	zval_ptr_dtor(param_datetime_buffers);
+	zval_ptr_dtor(field_cache);
+#else
     zval_ptr_dtor( &param_input_strings );
     zval_ptr_dtor( &output_params );
     zval_ptr_dtor( &param_streams );
     zval_ptr_dtor( &param_datetime_buffers );
     zval_ptr_dtor( &field_cache );
+#endif
 }
 
 
@@ -256,26 +315,39 @@ sqlsrv_stmt* core_sqlsrv_create_stmt( sqlsrv_conn* conn, driver_stmt_factory stm
         // handle has been set in the constructor of ss_sqlsrv_stmt, so we set it to NULL to prevent a double free 
         // in the catch block below.
         stmt_h = SQL_NULL_HANDLE;
+		
 
         // process the options array given to core_sqlsrv_prepare.  
         if( options_ht && zend_hash_num_elements( options_ht ) > 0 ) {
-
-            for( zend_hash_internal_pointer_reset( options_ht );
+#if PHP_MAJOR_VERSION >= 7
+			HashPosition pos;
+            for( zend_hash_internal_pointer_reset_ex( options_ht, &pos );
                  zend_hash_has_more_elements( options_ht ) == SUCCESS;
-                 zend_hash_move_forward( options_ht )) {
-
-                char *key = NULL;
-                unsigned int key_len = 0;
-                unsigned long index = -1;
-                zval** value_z = NULL;
-
-                int type = zend_hash_get_current_key_ex( options_ht, &key, &key_len, &index, 0, NULL );
+                 zend_hash_move_forward( options_ht )) 
+#else
+			for (zend_hash_internal_pointer_reset(options_ht);
+			zend_hash_has_more_elements(options_ht) == SUCCESS;
+				zend_hash_move_forward(options_ht))
+#endif
+			{
+#if PHP_MAJOR_VERSION >= 7
+				zend_string *key = NULL;
+				zend_ulong index = -1;
+				zval* value_z = NULL;
+                int type = zend_hash_get_current_key_ex( options_ht, &key, &index, &pos);
+#else
+				char *key = NULL;
+				unsigned int key_len = 0;
+				unsigned long index = -1;
+				zval** value_z = NULL;
+				int type = zend_hash_get_current_key_ex(options_ht, &key, &key_len, &index, 0, NULL);
+#endif
                 
                 // The driver layer should ensure a valid key.
                 DEBUG_SQLSRV_ASSERT(( type == HASH_KEY_IS_LONG ), "allocate_stmt: Invalid statment option key provided." );
                 
-                core::sqlsrv_zend_hash_get_current_data( *(stmt->conn), options_ht, (void**) &value_z TSRMLS_CC );
-                    
+				core::sqlsrv_zend_hash_get_current_data(*(stmt->conn), options_ht, (void **)&value_z TSRMLS_CC);
+
                 const stmt_option* stmt_opt = get_stmt_option( stmt->conn, index, valid_stmt_opts TSRMLS_CC );
                 
                 // if the key didn't match, then return the error to the script.
@@ -283,23 +355,20 @@ sqlsrv_stmt* core_sqlsrv_create_stmt( sqlsrv_conn* conn, driver_stmt_factory stm
                 DEBUG_SQLSRV_ASSERT( stmt_opt != NULL, "allocate_stmt: unexpected null value for statement option." ); 
                 
                 // perform the actions the statement option needs done. 
-                (*stmt_opt->func)( stmt, stmt_opt, *value_z TSRMLS_CC );
+                (*stmt_opt->func)( stmt, stmt_opt, value_z TSRMLS_CC );
             }
 
             zend_hash_internal_pointer_end( options_ht );
         }
 
-        sqlsrv_stmt* return_stmt = stmt;
-        stmt.transferred();
-
-        return return_stmt;
+        return stmt.transferred();
     }
     catch( core::CoreException& )
     {
         if( stmt ) {
 
             conn->set_last_error( stmt->last_error() );
-            stmt->~sqlsrv_stmt();
+            //stmt->~sqlsrv_stmt();
         }
 
         // if allocating the handle failed before the statement was allocated, free the handle
@@ -358,7 +427,11 @@ void core_sqlsrv_bind_param( sqlsrv_stmt* stmt, unsigned int param_num, int dire
     SQLLEN& ind_ptr = stmt->param_ind_ptrs[ param_num ];
 
     bool zval_was_null = (Z_TYPE_P( param_z ) == IS_NULL);
+#if PHP_MAJOR_VERSION >= 7
+	bool zval_was_bool = (  Z_TYPE_P(param_z) == IS_TRUE || Z_TYPE_P(param_z) == IS_FALSE);
+#else
     bool zval_was_bool = (Z_TYPE_P( param_z ) == IS_BOOL);
+#endif
     // if the user asks for for a specific type for input and output, make sure the data type we send matches the data we
     // type we expect back, since we can only send and receive the same type.  Anything can be converted to a string, so
     // we always let that match if they want a string back.
@@ -448,7 +521,13 @@ void core_sqlsrv_bind_param( sqlsrv_stmt* stmt, unsigned int param_num, int dire
                 buffer_len = 0;
             }
             break;
-        case IS_BOOL:
+			//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		case IS_TRUE:
+		case IS_FALSE:
+#else
+		case IS_BOOL:
+#endif
         case IS_LONG:
             {
                 buffer = &param_z->value;
@@ -477,10 +556,11 @@ void core_sqlsrv_bind_param( sqlsrv_stmt* stmt, unsigned int param_num, int dire
             buffer = Z_STRVAL_P( param_z );
             buffer_len = Z_STRLEN_P( param_z );
             // if the encoding is UTF-8, translate from UTF-8 to UTF-16 (the type variables should have already been adjusted)
-            if( direction == SQL_PARAM_INPUT && encoding == CP_UTF8 ) {
+            if( direction == SQL_PARAM_INPUT && encoding == CP_UTF8 ) 
+			{
 
                 zval_auto_ptr wbuffer_z;
-                ALLOC_INIT_ZVAL( wbuffer_z );
+				ALLOC_INIT_ZVAL(wbuffer_z);
 
                 bool converted = convert_input_param_to_utf16( param_z, wbuffer_z );
                 CHECK_CUSTOM_ERROR( !converted, stmt, SQLSRV_ERROR_INPUT_PARAM_ENCODING_TRANSLATE, 
@@ -495,14 +575,28 @@ void core_sqlsrv_bind_param( sqlsrv_stmt* stmt, unsigned int param_num, int dire
             ind_ptr = buffer_len;
             if( direction != SQL_PARAM_INPUT ) {
 
-#if PHP_MAJOR_VERSION == 5 && PHP_MINOR_VERSION >= 4
-                // PHP 5.4 added interned strings, so since we obviously want to change that string here in some fashion,
-                // we reallocate the string if it's interned
-                if( IS_INTERNED( buffer )) {
-                    ZVAL_STRINGL( param_z, static_cast<const char*>(buffer), buffer_len, 1 );
-                    buffer = Z_STRVAL_P( param_z );
-                    buffer_len = Z_STRLEN_P( param_z );
-                }
+#if PHP_MAJOR_VERSION > 5 || (PHP_MAJOR_VERSION==5 && PHP_MINOR_VERSION >= 4)
+                
+                
+				//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+				if (IS_INTERNED( Z_STR_P( static_cast<zval *>(buffer)) ) )
+				{
+                    ZVAL_STRINGL( param_z, static_cast<const char*>(buffer), buffer_len);
+					buffer = Z_STRVAL_P(param_z);
+					buffer_len = Z_STRLEN_P(param_z);
+				}
+#else
+				// PHP 5.4 added interned strings, so since we obviously want to change that string here in some fashion,
+				// we reallocate the string if it's interned
+				if (IS_INTERNED(buffer)) 
+				{
+					ZVAL_STRINGL(param_z, static_cast<const char*>(buffer), buffer_len, 1);
+					buffer = Z_STRVAL_P(param_z);
+					buffer_len = Z_STRLEN_P(param_z);
+				}
+#endif
+                    
 #endif
 
                 // if it's a UTF-8 input output parameter (signified by the C type being SQL_C_WCHAR)
@@ -562,17 +656,61 @@ void core_sqlsrv_bind_param( sqlsrv_stmt* stmt, unsigned int param_num, int dire
                 SQLSRV_ASSERT( direction == SQL_PARAM_INPUT, "Invalid output param type.  The driver layer should catch this." ); 
                 sqlsrv_stream stream_encoding( param_z, encoding );
                 HashTable* streams_ht = Z_ARRVAL_P( stmt->param_streams );
-                core::sqlsrv_zend_hash_index_update( *stmt, streams_ht, param_num, &stream_encoding, sizeof( stream_encoding )
-                                                     TSRMLS_CC );
-                buffer = reinterpret_cast<SQLPOINTER>( param_num );
+				//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+				core::sqlsrv_zend_hash_index_update(*stmt, streams_ht, param_num, (zval *)&stream_encoding, sizeof(stream_encoding) TSRMLS_CC);
+#else
+                core::sqlsrv_zend_hash_index_update( *stmt, streams_ht, param_num, &stream_encoding, sizeof( stream_encoding ) TSRMLS_CC );
+#endif
+                
+				buffer = reinterpret_cast<SQLPOINTER>( param_num );
+				//PHP7 Port
+#if PHP_MAJOR_VERSION >=7
+				zval_add_ref(param_z); // so that it doesn't go away while we're using it
+#else
                 zval_add_ref( &param_z ); // so that it doesn't go away while we're using it
+#endif
                 buffer_len = 0;
                 ind_ptr = SQL_DATA_AT_EXEC;
             }
             break;
         case IS_OBJECT:
         {
-            SQLSRV_ASSERT( direction == SQL_PARAM_INPUT, "Invalid output param type.  The driver layer should catch this." ); 
+            //SQLSRV_ASSERT( direction == SQL_PARAM_INPUT, "Invalid output param type.  The driver layer should catch this." ); 
+			//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+			zval_auto_ptr function_z;
+			zval_auto_ptr buffer_z;
+			zval_auto_ptr format_z;
+			zval params[1];
+
+			zend_class_entry *class_entry = param_z->value.ce;
+			bool valid_class_name_found = false;
+
+			while (class_entry != NULL)
+			{
+				if (get_zend_string_len(class_entry->name) == DateTime::DATETIME_CLASS_NAME_LEN && class_entry->name != NULL &&
+					strncmp(class_entry->name->val, DateTime::DATETIME_CLASS_NAME, class_entry->name->len) == 0)
+				{
+					valid_class_name_found = true;
+					break;
+				}
+
+				else {
+
+					// Check the parent 
+					class_entry = class_entry->parent;
+				}
+			}
+
+			CHECK_CUSTOM_ERROR(!valid_class_name_found, stmt, SQLSRV_ERROR_INVALID_PARAMETER_PHPTYPE, param_num + 1) {
+				throw core::CoreException();
+			}
+
+			ALLOC_ZVAL(buffer_z);
+			ALLOC_ZVAL(function_z);
+			ALLOC_ZVAL(format_z);
+#else
             zval_auto_ptr function_z;
             zval_auto_ptr buffer_z;
             zval_auto_ptr format_z;
@@ -581,10 +719,12 @@ void core_sqlsrv_bind_param( sqlsrv_stmt* stmt, unsigned int param_num, int dire
 
             zend_class_entry *class_entry = zend_get_class_entry( param_z TSRMLS_CC );
 
-            while( class_entry != NULL ) {
+            while( class_entry != NULL ) 
+			{
                 
                 if( class_entry->name_length == DateTime::DATETIME_CLASS_NAME_LEN && class_entry->name != NULL && 
-                    stricmp( class_entry->name, DateTime::DATETIME_CLASS_NAME ) == 0 ) {
+                    _stricmp( class_entry->name, DateTime::DATETIME_CLASS_NAME ) == 0 ) 
+				{
                     valid_class_name_found = true;
                     break;
                 }
@@ -600,39 +740,91 @@ void core_sqlsrv_bind_param( sqlsrv_stmt* stmt, unsigned int param_num, int dire
                 throw core::CoreException();
             }
 
-            ALLOC_INIT_ZVAL( buffer_z );
-            ALLOC_INIT_ZVAL( function_z );
-            ALLOC_INIT_ZVAL( format_z );
+			ALLOC_INIT_ZVAL(buffer_z);
+			ALLOC_INIT_ZVAL(function_z);
+			ALLOC_INIT_ZVAL(format_z);
+#endif
             // if the user specifies the 'date' sql type, giving it the normal format will cause a 'date overflow error'
             // meaning there is too much information in the character string.  If the user specifies the 'datetimeoffset'
             // sql type, it lacks the timezone.
-            if( sql_type == SQL_SS_TIMESTAMPOFFSET ) {
+            if( sql_type == SQL_SS_TIMESTAMPOFFSET ) 
+			{
+				//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+				ZVAL_STRINGL(format_z, const_cast<char*>(DateTime::DATETIMEOFFSET_FORMAT),
+					DateTime::DATETIMEOFFSET_FORMAT_LEN);
+#else
                 ZVAL_STRINGL( format_z, const_cast<char*>( DateTime::DATETIMEOFFSET_FORMAT ), 
                               DateTime::DATETIMEOFFSET_FORMAT_LEN, 1 /* dup */ );
+#endif
             }
-            else if( sql_type == SQL_TYPE_DATE ) {
+            else if( sql_type == SQL_TYPE_DATE ) 
+			{
+				//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+				ZVAL_STRINGL(format_z, const_cast<char*>(DateTime::DATE_FORMAT), DateTime::DATE_FORMAT_LEN);
+#else
                 ZVAL_STRINGL( format_z, const_cast<char*>( DateTime::DATE_FORMAT ), DateTime::DATE_FORMAT_LEN, 1 /* dup */ );
+#endif
             }
             else {
+				//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+				ZVAL_STRINGL(format_z, const_cast<char*>(DateTime::DATETIME_FORMAT), DateTime::DATETIME_FORMAT_LEN);
+#else
                 ZVAL_STRINGL( format_z, const_cast<char*>( DateTime::DATETIME_FORMAT ), DateTime::DATETIME_FORMAT_LEN, 
                               1 /* dup */);
+#endif
             }
             // call the DateTime::format member function to convert the object to a string that SQL Server understands
-            ZVAL_STRINGL( function_z, "format", sizeof( "format" ) - 1, 1 );
-            params[0] = format_z;
-            // This is equivalent to the PHP code: $param_z->format( $format_z ); where param_z is the
-            // DateTime object and $format_z is the format string.
-            int zr = call_user_function( EG( function_table ), &param_z, function_z, buffer_z, 1, params TSRMLS_CC );
-            CHECK_CUSTOM_ERROR( zr == FAILURE, stmt, SQLSRV_ERROR_INVALID_PARAMETER_PHPTYPE, param_num + 1 ) {
-                throw core::CoreException();
-            }
-            buffer = Z_STRVAL_P( buffer_z );
-            zr = add_next_index_zval( stmt->param_datetime_buffers, buffer_z );
-            CHECK_CUSTOM_ERROR( zr == FAILURE, stmt, SQLSRV_ERROR_INVALID_PARAMETER_PHPTYPE, param_num + 1 ) {
-                throw core::CoreException();
-            }
-            buffer_len = Z_STRLEN_P( buffer_z );
-            buffer_z.transferred();
+			//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+            ZVAL_STRINGL( function_z, "format", sizeof( "format" ) - 1);
+			params[0] = *format_z;
+			// This is equivalent to the PHP code: $param_z->format( $format_z ); where param_z is the
+			// DateTime object and $format_z is the format string.
+			int zr = call_user_function(EG(function_table), param_z, function_z, buffer_z, 1, params TSRMLS_CC);
+			CHECK_CUSTOM_ERROR(zr == FAILURE, stmt, SQLSRV_ERROR_INVALID_PARAMETER_PHPTYPE, param_num + 1)
+			{
+				throw core::CoreException();
+			}
+
+			buffer = Z_STR_P(buffer_z);
+			zr = add_next_index_zval(stmt->param_datetime_buffers, buffer_z);
+
+			CHECK_CUSTOM_ERROR(zr == FAILURE, stmt, SQLSRV_ERROR_INVALID_PARAMETER_PHPTYPE, param_num + 1)
+			{
+				throw core::CoreException();
+			}
+
+			buffer_len = Z_STRLEN_P(buffer_z);
+			//buffer_z.transferred();//no smart ptr anymore
+#else
+			ZVAL_STRINGL(function_z, "format", sizeof("format") - 1, 1);
+			params[0] = format_z;
+			// This is equivalent to the PHP code: $param_z->format( $format_z ); where param_z is the
+			// DateTime object and $format_z is the format string.
+			int zr = call_user_function(EG(function_table), &param_z, function_z, buffer_z, 1, params TSRMLS_CC);
+			CHECK_CUSTOM_ERROR(zr == FAILURE, stmt, SQLSRV_ERROR_INVALID_PARAMETER_PHPTYPE, param_num + 1)
+			{
+				throw core::CoreException();
+			}
+
+			buffer = Z_STRVAL_P(buffer_z);
+			zr = add_next_index_zval(stmt->param_datetime_buffers, buffer_z);
+
+			CHECK_CUSTOM_ERROR(zr == FAILURE, stmt, SQLSRV_ERROR_INVALID_PARAMETER_PHPTYPE, param_num + 1)
+			{
+				throw core::CoreException();
+			}
+
+			buffer_len = Z_STRLEN_P(buffer_z);
+			buffer_z.transferred();
+#endif
+
+            
+
+            
             ind_ptr = buffer_len;
             break;
         }            
@@ -691,7 +883,7 @@ void core_sqlsrv_execute( sqlsrv_stmt* stmt TSRMLS_DC, const char* sql, int sql_
                                      stmt->encoding() );
             wsql_string = utf16_string_from_mbcs_string( encoding, reinterpret_cast<const char*>( sql ),
                                                          sql_len, &wsql_len );
-            CHECK_CUSTOM_ERROR( wsql_string == NULL, stmt, SQLSRV_ERROR_QUERY_STRING_ENCODING_TRANSLATE, 
+            CHECK_CUSTOM_ERROR( !wsql_string, stmt, SQLSRV_ERROR_QUERY_STRING_ENCODING_TRANSLATE, 
                                 get_last_error_message() ) {
                 throw core::CoreException();
             }
@@ -702,14 +894,14 @@ void core_sqlsrv_execute( sqlsrv_stmt* stmt TSRMLS_DC, const char* sql, int sql_
         r = core::SQLExecute( stmt TSRMLS_CC );
     }
 
-	// if data is needed (streams were bound) and they should be sent at execute time, then do so now
+    stmt->new_result_set( TSRMLS_C );
+    stmt->executed = true;
+
+    // if data is needed (streams were bound) and they should be sent at execute time, then do so now
     if( r == SQL_NEED_DATA && stmt->send_streams_at_exec ) {
 
         send_param_streams( stmt TSRMLS_CC );
     }
-	
-    stmt->new_result_set( TSRMLS_C );
-    stmt->executed = true;
 
     // if all the data has been sent and no data was returned then finalize the output parameters
     if( stmt->send_streams_at_exec && (r == SQL_NO_DATA || !core_sqlsrv_has_any_result( stmt TSRMLS_CC ))) {
@@ -745,7 +937,7 @@ void core_sqlsrv_execute( sqlsrv_stmt* stmt TSRMLS_DC, const char* sql, int sql_
 bool core_sqlsrv_fetch( sqlsrv_stmt* stmt, SQLSMALLINT fetch_orientation, SQLLEN fetch_offset TSRMLS_DC )
 {
     // pre-condition check
-    SQLSRV_ASSERT( fetch_orientation >= SQL_FETCH_NEXT || fetch_orientation <= SQL_FETCH_RELATIVE,
+    SQLSRV_ASSERT( fetch_orientation >= SQL_FETCH_NEXT && fetch_orientation <= SQL_FETCH_RELATIVE,
                    "core_sqlsrv_fetch: Invalid value provided for fetch_orientation parameter." );
     
     try {
@@ -812,19 +1004,17 @@ bool core_sqlsrv_fetch( sqlsrv_stmt* stmt, SQLSMALLINT fetch_orientation, SQLLEN
 // Return:
 // A field_meta_data* consisting of the field metadata.
 
-field_meta_data* core_sqlsrv_field_metadata( sqlsrv_stmt* stmt, SQLSMALLINT colno TSRMLS_DC )
+field_meta_data *core_sqlsrv_field_metadata( sqlsrv_stmt* stmt, SQLSMALLINT colno TSRMLS_DC )
 {
     // pre-condition check
     SQLSRV_ASSERT( colno >= 0, "core_sqlsrv_field_metadata: Invalid column number provided." );
 
-    sqlsrv_malloc_auto_ptr<field_meta_data> meta_data;
     SQLSMALLINT field_name_len = 0;
-    
-    meta_data = new ( sqlsrv_malloc( sizeof( field_meta_data ))) field_meta_data();
-    meta_data->field_name = static_cast<SQLCHAR*>( sqlsrv_malloc( SS_MAXCOLNAMELEN + 1 ));
+    sqlsrv_malloc_auto_ptr<field_meta_data> meta_data( new ( sqlsrv_malloc( sizeof( field_meta_data ))) field_meta_data() );
+    meta_data->field_name = static_cast<SQLCHAR*>( sqlsrv_malloc( SS_MAXCOLNAMELEN*2 + 1 )); // space added for possible utf8 conversion from utf16.
     
     try {
-        core::SQLDescribeCol( stmt, colno + 1, meta_data->field_name.get(), SS_MAXCOLNAMELEN, &field_name_len, 
+        core::SQLDescribeCol( stmt, colno + 1, meta_data->field_name.get(), SS_MAXCOLNAMELEN*2+1, &field_name_len, 
                         &(meta_data->field_type), &(meta_data->field_size), &(meta_data->field_scale), 
                         &(meta_data->field_is_nullable) TSRMLS_CC );              
     }
@@ -860,10 +1050,7 @@ field_meta_data* core_sqlsrv_field_metadata( sqlsrv_stmt* stmt, SQLSMALLINT coln
 
     // Set the field name lenth
     meta_data->field_name_len = field_name_len;
-    
-    field_meta_data* result_field_meta_data = meta_data;
-    meta_data.transferred();    
-    return result_field_meta_data;
+    return meta_data.transferred();    
 }
 
 
@@ -889,7 +1076,13 @@ void core_sqlsrv_get_field( sqlsrv_stmt* stmt, SQLUSMALLINT field_index, sqlsrv_
       
         // if the field has been retrieved before, return the previous result
         field_cache* cached = NULL;
-        if( zend_hash_index_find( Z_ARRVAL_P( stmt->field_cache ), field_index, (void**) &cached ) == SUCCESS ) {
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		if ( (cached= (field_cache*) zend_hash_index_find(Z_ARRVAL_P(stmt->field_cache), field_index)) != NULL)
+#else
+        if( zend_hash_index_find( Z_ARRVAL_P( stmt->field_cache ), field_index, (void**) &cached ) == SUCCESS ) 
+#endif
+		{
             // the field value is NULL
             if( cached->value == NULL ) {
                 *field_value = NULL;
@@ -925,9 +1118,19 @@ void core_sqlsrv_get_field( sqlsrv_stmt* stmt, SQLUSMALLINT field_index, sqlsrv_
         if( cache_field && ( field_index - stmt->last_field_index ) >= 2 ) {
             sqlsrv_phptype invalid;
             invalid.typeinfo.type = SQLSRV_PHPTYPE_INVALID;
-            for( int i = stmt->last_field_index + 1; i < field_index; ++i ) {
-                SQLSRV_ASSERT( zend_hash_index_find( Z_ARRVAL_P( stmt->field_cache ), i, (void**) &cached ) == FAILURE,
-                               "Field already cached." );
+            for( int i = stmt->last_field_index + 1; i < field_index; ++i ) 
+			{
+				//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+				auto temp = zend_hash_index_find(Z_ARRVAL_P(stmt->field_cache), i);
+				
+				SQLSRV_ASSERT(temp != NULL,	"Field already cached." );
+				cached = (field_cache*)temp;
+#else
+				SQLSRV_ASSERT(zend_hash_index_find(Z_ARRVAL_P(stmt->field_cache), i, (void**)&cached) == FAILURE,
+					"Field already cached.");
+#endif
+                
                 core_sqlsrv_get_field( stmt, i, invalid, prefer_string, field_value, field_len, cache_field, 
                                        sqlsrv_php_type_out TSRMLS_CC );
                 // delete the value returned since we only want it cached, not the actual value
@@ -964,10 +1167,18 @@ void core_sqlsrv_get_field( sqlsrv_stmt* stmt, SQLUSMALLINT field_index, sqlsrv_
         core_get_field_common( stmt, field_index, sqlsrv_php_type, field_value, field_len TSRMLS_CC );        
 
         // if the user wants us to cache the field, we'll do it
-        if( cache_field ) {
+        if( cache_field ) 
+		{
             field_cache cache( *field_value, *field_len, sqlsrv_php_type );
-            core::sqlsrv_zend_hash_index_update( *stmt, Z_ARRVAL_P( stmt->field_cache ), field_index, &cache, 
-                                                 sizeof( field_cache ) TSRMLS_CC );
+			//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+			core::sqlsrv_zend_hash_index_update(*stmt, Z_ARRVAL_P(stmt->field_cache), field_index, (zval *)&cache,
+				sizeof(field_cache) TSRMLS_CC);
+#else
+			core::sqlsrv_zend_hash_index_update(*stmt, Z_ARRVAL_P(stmt->field_cache), field_index, &cache,
+				sizeof(field_cache) TSRMLS_CC);
+#endif 
+
         }
     }
 
@@ -1069,7 +1280,12 @@ void core_sqlsrv_post_param( sqlsrv_stmt* stmt, unsigned int param_num, zval* pa
     // with sqlsrv_send_stream_data.
     if( zend_hash_index_exists( Z_ARRVAL_P( stmt->param_streams ), param_num )) {
         sqlsrv_stream* stream_encoding;
-        zend_hash_index_find( Z_ARRVAL_P( stmt->param_streams ), param_num, (void**) &stream_encoding );
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		stream_encoding = (sqlsrv_stream*)zend_hash_index_find( Z_ARRVAL_P( stmt->param_streams ), param_num);
+#else
+		zend_hash_index_find(Z_ARRVAL_P(stmt->param_streams), param_num, (void**)&stream_encoding);
+#endif
         core::sqlsrv_zend_hash_index_del( *stmt, Z_ARRVAL_P( stmt->param_streams ), param_num TSRMLS_CC );
     }
 }
@@ -1345,7 +1561,12 @@ void close_active_stream( __inout sqlsrv_stmt* stmt TSRMLS_DC )
     php_stream* stream = NULL;
 
     // we use no verify since verify would return immediately and we want to assert, not return.
-    php_stream_from_zval_no_verify( stream, &stmt->active_stream );
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+    php_stream_from_zval_no_verify( stream, stmt->active_stream );
+#else
+	php_stream_from_zval_no_verify(stream, &stmt->active_stream);
+#endif
 
     SQLSRV_ASSERT(( stream != NULL ), "close_active_stream: Unknown resource type as our active stream." );
 
@@ -1483,35 +1704,41 @@ void core_get_field_common( __inout sqlsrv_stmt* stmt, SQLUSMALLINT field_index,
         close_active_stream( stmt TSRMLS_CC );
 
         // make sure that fetch is called before trying to retrieve.
-        CHECK_CUSTOM_ERROR( !stmt->fetch_called, stmt, SQLSRV_ERROR_FETCH_NOT_CALLED ) {
+        CHECK_CUSTOM_ERROR( !stmt->fetch_called, stmt, SQLSRV_ERROR_FETCH_NOT_CALLED ) 
+		{
             throw core::CoreException();
         }
 
         // make sure that fields are not retrieved incorrectly.
         CHECK_CUSTOM_ERROR( stmt->last_field_index > field_index, stmt, SQLSRV_ERROR_FIELD_INDEX_ERROR, field_index, 
-                            stmt->last_field_index ) {
+                            stmt->last_field_index ) 
+		{
             throw core::CoreException();
         }
 
-        switch( sqlsrv_php_type.typeinfo.type ) {
+        switch( sqlsrv_php_type.typeinfo.type ) 
+		{
         
             case SQLSRV_PHPTYPE_INT:
             {
-                sqlsrv_malloc_auto_ptr<long> field_value_temp;  
-                field_value_temp = static_cast<long*>( sqlsrv_malloc( sizeof( long )));
+				sqlsrv_malloc_auto_ptr<long> field_value_temp;
+				field_value_temp = static_cast<long*>(sqlsrv_malloc(sizeof(long)));
 
                 SQLRETURN r = stmt->current_results->get_data(field_index + 1, SQL_C_LONG, field_value_temp, sizeof( long ), 
                                                               field_len, true /*handle_warning*/ TSRMLS_CC );
                 
-                CHECK_SQL_ERROR_OR_WARNING( r, stmt ) {
+                CHECK_SQL_ERROR_OR_WARNING( r, stmt ) 
+				{
                     throw core::CoreException();
                 }
 
-                CHECK_CUSTOM_ERROR( (r == SQL_NO_DATA), stmt, SQLSRV_ERROR_NO_DATA, field_index ) {
+                CHECK_CUSTOM_ERROR( (r == SQL_NO_DATA), stmt, SQLSRV_ERROR_NO_DATA, field_index ) 
+				{
                     throw core::CoreException();
                 }
 
-                if( *field_len == SQL_NULL_DATA ) {
+                if( *field_len == SQL_NULL_DATA ) 
+				{
                     *field_value = NULL;
                     break;
                 }
@@ -1555,88 +1782,101 @@ void core_get_field_common( __inout sqlsrv_stmt* stmt, SQLUSMALLINT field_index,
             
             // get the date as a string (http://msdn2.microsoft.com/en-us/library/ms712387(VS.85).aspx) and
             // convert it to a DateTime object and return the created object
-            case SQLSRV_PHPTYPE_DATETIME:
-            {
-                char field_value_temp[ MAX_DATETIME_STRING_LEN ]; 
-                zval_auto_ptr field_value_temp_z;
-                zval_auto_ptr return_value_z;
-                zval_auto_ptr function_z;
-                zval* params[1];
-                ALLOC_INIT_ZVAL( field_value_temp_z );
-                ALLOC_INIT_ZVAL( function_z );
-                ALLOC_INIT_ZVAL( return_value_z );
+			case SQLSRV_PHPTYPE_DATETIME:
+			{
+				char field_value_temp[MAX_DATETIME_STRING_LEN];
+				zval_auto_ptr field_value_temp_z;
+				zval_auto_ptr return_value_z;
+				zval_auto_ptr function_z;
+				zval* params[1];
+				ALLOC_INIT_ZVAL(field_value_temp_z);
+				ALLOC_INIT_ZVAL(function_z);
+				ALLOC_INIT_ZVAL(return_value_z);
 
-                SQLRETURN r = stmt->current_results->get_data( field_index + 1, SQL_C_CHAR, field_value_temp, 
-                                                               MAX_DATETIME_STRING_LEN, field_len, true TSRMLS_CC ); 
+				SQLRETURN r = stmt->current_results->get_data(field_index + 1, SQL_C_CHAR, field_value_temp,
+					MAX_DATETIME_STRING_LEN, field_len, true TSRMLS_CC);
 
-                CHECK_CUSTOM_ERROR( (r == SQL_NO_DATA), stmt, SQLSRV_ERROR_NO_DATA, field_index ) {
-                    throw core::CoreException ();
-                }
+				CHECK_CUSTOM_ERROR((r == SQL_NO_DATA), stmt, SQLSRV_ERROR_NO_DATA, field_index) {
+					throw core::CoreException();
+				}
 
-                if( *field_len == SQL_NULL_DATA ) {
-                    ZVAL_NULL( return_value_z );
-                    *field_value = reinterpret_cast<void*>( return_value_z.get() );
-                    return_value_z.transferred();
-                    break;
-                }
-                
-                // Convert the string date to a DateTime object
-                ZVAL_STRINGL( field_value_temp_z, field_value_temp, *field_len, 1 );
-                ZVAL_STRINGL( function_z, "date_create", sizeof("date_create") -1, 1 );
-                params[0]  = field_value_temp_z;
+				if (*field_len == SQL_NULL_DATA) {
+					ZVAL_NULL(return_value_z);
+					*field_value = reinterpret_cast<void*>(return_value_z.get());
+					return_value_z.transferred();
+					break;
+				}
 
-                if( call_user_function( EG( function_table ), NULL, function_z, return_value_z, 1, 
-                                        params TSRMLS_CC ) == FAILURE ) {
-                    THROW_CORE_ERROR( stmt, SQLSRV_ERROR_DATETIME_CONVERSION_FAILED );
-                }
+				// Convert the string date to a DateTime object
+#if PHP_MAJOR_VERSION >= 7
+				ZVAL_STRINGL(field_value_temp_z, field_value_temp, *field_len);
+				ZVAL_STRINGL(function_z, "date_create", sizeof("date_create") - 1);
+#else
+				ZVAL_STRINGL(field_value_temp_z, field_value_temp, *field_len, 1);
+				ZVAL_STRINGL(function_z, "date_create", sizeof("date_create") - 1, 1);
+#endif
 
-                *field_value = reinterpret_cast<void*>( return_value_z.get() );
-                return_value_z.transferred();
-                break;
-            }
+				params[0] = field_value_temp_z;
+
+#if PHP_MAJOR_VERSION >= 7
+				if (call_user_function(EG(function_table), NULL, function_z, return_value_z, 1,
+					params[0] TSRMLS_CC) == FAILURE) {
+					THROW_CORE_ERROR(stmt, SQLSRV_ERROR_DATETIME_CONVERSION_FAILED);
+				}
+#else
+				if (call_user_function(EG(function_table), NULL, function_z, return_value_z, 1,
+					params TSRMLS_CC) == FAILURE) {
+					THROW_CORE_ERROR(stmt, SQLSRV_ERROR_DATETIME_CONVERSION_FAILED);
+				}
+#endif
+
+				*field_value = reinterpret_cast<void*>(return_value_z.get());
+				return_value_z.transferred();
+				break;
+			}
             
             // create a stream wrapper around the field and return that object to the PHP script.  calls to fread
             // on the stream will result in calls to SQLGetData.  This is handled in stream.cpp.  See that file
             // for how these fields are used.
-            case SQLSRV_PHPTYPE_STREAM:
-            {
-                zval_auto_ptr return_value_z;
-                php_stream* stream = NULL;
-                sqlsrv_stream* ss = NULL;
-                ALLOC_INIT_ZVAL( return_value_z );
-                SQLINTEGER sql_type;
+			case SQLSRV_PHPTYPE_STREAM:
+			{
+				zval_auto_ptr return_value_z;
+				php_stream* stream = NULL;
+				sqlsrv_stream* ss = NULL;
+				ALLOC_INIT_ZVAL(return_value_z);
+				SQLLEN sql_type;
 
-                SQLRETURN r = SQLColAttribute( stmt->handle(), field_index + 1, SQL_DESC_TYPE, NULL, 0, NULL, &sql_type );
-                CHECK_SQL_ERROR_OR_WARNING( r, stmt ) {
-                    throw core::CoreException();
-                }
-                
-                CHECK_CUSTOM_ERROR( !is_streamable_type( sql_type ), stmt, SQLSRV_ERROR_STREAMABLE_TYPES_ONLY ) {
-                    throw core::CoreException();
-                }
-                
-                stream = php_stream_open_wrapper( "sqlsrv://sqlncli10", "r", 0, NULL );
+				SQLRETURN r = SQLColAttribute(stmt->handle(), field_index + 1, SQL_DESC_TYPE, NULL, 0, NULL, &sql_type);
+				CHECK_SQL_ERROR_OR_WARNING(r, stmt) {
+					throw core::CoreException();
+				}
 
-                CHECK_CUSTOM_ERROR( !stream, stmt, SQLSRV_ERROR_STREAM_CREATE ) {
-                    throw core::CoreException();
-                }
+				CHECK_CUSTOM_ERROR(!is_streamable_type(sql_type), stmt, SQLSRV_ERROR_STREAMABLE_TYPES_ONLY) {
+					throw core::CoreException();
+				}
 
-                ss = static_cast<sqlsrv_stream*>( stream->abstract );
-                ss->stmt = stmt;
-                ss->field_index = field_index;                    
-                ss->sql_type = static_cast<SQLUSMALLINT>( sql_type );
-                ss->encoding = static_cast<SQLSRV_ENCODING>( sqlsrv_php_type.typeinfo.encoding );
+				stream = php_stream_open_wrapper("sqlsrv://sqlncli10", "r", 0, NULL);
 
-                // turn our stream into a zval to be returned
-                php_stream_to_zval( stream, return_value_z );
+				CHECK_CUSTOM_ERROR(!stream, stmt, SQLSRV_ERROR_STREAM_CREATE) {
+					throw core::CoreException();
+				}
 
-                // mark this as our active stream
-                stmt->active_stream = return_value_z;
-                *field_value = reinterpret_cast<void*>( return_value_z.get() );
-                return_value_z.transferred();
+				ss = static_cast<sqlsrv_stream*>(stream->abstract);
+				ss->stmt = stmt;
+				ss->field_index = field_index;
+				ss->sql_type = static_cast<SQLUSMALLINT>(sql_type);
+				ss->encoding = static_cast<SQLSRV_ENCODING>(sqlsrv_php_type.typeinfo.encoding);
 
-                break;
-            }
+				// turn our stream into a zval to be returned
+				php_stream_to_zval(stream, return_value_z);
+
+				// mark this as our active stream
+				stmt->active_stream = return_value_z;
+				*field_value = reinterpret_cast<void*>(return_value_z.get());
+				return_value_z.transferred();
+
+				break;
+			}
 
             case SQLSRV_PHPTYPE_NULL:
                 *field_value = NULL;
@@ -1648,7 +1888,7 @@ void core_get_field_common( __inout sqlsrv_stmt* stmt, SQLUSMALLINT field_index,
                 break;
         }
 
-        // sucessfully retrieved the field, so update our last retrieved field
+        // successfully retrieved the field, so update our last retrieved field
         if( stmt->last_field_index < field_index ) {
             stmt->last_field_index = field_index;
         }
@@ -1663,27 +1903,36 @@ void core_get_field_common( __inout sqlsrv_stmt* stmt, SQLUSMALLINT field_index,
 // see if there is another stream to be sent.  Returns true and sets the stream as current in the statement structure, otherwise
 // returns false
 
-bool check_for_next_stream_parameter( __inout sqlsrv_stmt* stmt TSRMLS_DC )
+bool check_for_next_stream_parameter(__inout sqlsrv_stmt* stmt TSRMLS_DC)
 {
-    int stream_index = 0;
-    SQLRETURN r = SQL_SUCCESS;
-    sqlsrv_stream* stream_encoding;
-    zval* param_z = NULL;
+	int stream_index = 0;
+	SQLRETURN r = SQL_SUCCESS;
+	sqlsrv_stream* stream_encoding;
+	zval* param_z = NULL;
 
-    // get the index into the streams_ht from the parameter data we set in core_sqlsrv_bind_param
-    r = core::SQLParamData( stmt, reinterpret_cast<SQLPOINTER*>( &stream_index ) TSRMLS_CC );
-    // if no more data, we've exhausted the bound parameters, so return that we're done
-    if( SQL_SUCCEEDED( r ) || r == SQL_NO_DATA ) {
+	// get the index into the streams_ht from the parameter data we set in core_sqlsrv_bind_param
+	r = core::SQLParamData(stmt, reinterpret_cast<SQLPOINTER*>(&stream_index) TSRMLS_CC);
+	// if no more data, we've exhausted the bound parameters, so return that we're done
+	if (SQL_SUCCEEDED(r) || r == SQL_NO_DATA) {
 
-        // we're all done, so return false
-        return false;
-    }
+		// we're all done, so return false
+		return false;
+	}
 
-    HashTable* streams_ht = Z_ARRVAL_P( stmt->param_streams );
+	HashTable* streams_ht = Z_ARRVAL_P(stmt->param_streams);
 
-    // pull out the sqlsrv_encoding struct
-    int zr = zend_hash_index_find( streams_ht, stream_index, (void**) &stream_encoding );
-    SQLSRV_ASSERT( zr == SUCCESS, "Stream parameter does not exist" );  // if the index isn't in the hash, that's a serious error
+	// pull out the sqlsrv_encoding struct
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	zval* temp = zend_hash_index_find(streams_ht, stream_index);
+    SQLSRV_ASSERT(temp != NULL, "Stream parameter does not exist");  // if the index isn't in the hash, that's a serious error
+	stream_encoding = (sqlsrv_stream*)temp;
+#else
+	int zr = zend_hash_index_find(streams_ht, stream_index, (void**)&stream_encoding);
+	SQLSRV_ASSERT(zr == SUCCESS, "Stream parameter does not exist");  // if the index isn't in the hash, that's a serious error
+#endif
+   
+    
 
     param_z = stream_encoding->stream_z;
 
@@ -1710,7 +1959,12 @@ bool convert_input_param_to_utf16( zval* input_param_z, zval* converted_param_z 
     // if the string is empty, then just return that the conversion succeeded as
     // MultiByteToWideChar will "fail" on an empty string.
     if( buffer_len == 0 ) {
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		ZVAL_STRINGL(converted_param_z, "", 0);
+#else
         ZVAL_STRINGL( converted_param_z, "", 0, 1 );
+#endif
         return true;
     }
 
@@ -1732,8 +1986,15 @@ bool convert_input_param_to_utf16( zval* input_param_z, zval* converted_param_z 
 
     // null terminate the string, set the size within the zval, and return success
     wbuffer[ wchar_size ] = L'\0';
-    ZVAL_STRINGL( converted_param_z, reinterpret_cast<char*>( wbuffer.get() ),
-                  wchar_size * sizeof( wchar_t ), 0 );
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	ZVAL_STRINGL(converted_param_z, reinterpret_cast<char*>(wbuffer.get()),
+		wchar_size * sizeof(wchar_t));
+#else 
+	ZVAL_STRINGL(converted_param_z, reinterpret_cast<char*>(wbuffer.get()),
+		wchar_size * sizeof(wchar_t), 0);
+#endif
+    
     wbuffer.transferred();
 
     return true;
@@ -1761,8 +2022,14 @@ SQLSMALLINT default_c_type( sqlsrv_stmt* stmt, unsigned int paramno, zval const*
                     sql_c_type = SQL_C_CHAR;
                     break;
             }
-        break;
-        case IS_BOOL:
+	    break;
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		case IS_TRUE:
+		case IS_FALSE:
+#else
+		case IS_BOOL:
+#endif
         case IS_LONG:
             sql_c_type = SQL_C_LONG;
             break;
@@ -1825,7 +2092,13 @@ void default_sql_type( sqlsrv_stmt* stmt, unsigned int paramno, zval* param_z, S
                     break;
             }
             break;
-        case IS_BOOL:
+			//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		case IS_TRUE:
+		case IS_FALSE:
+#else
+		case IS_BOOL:
+#endif
         case IS_LONG:
             sql_type = SQL_INTEGER;
             break;
@@ -1886,7 +2159,13 @@ void default_sql_size_and_scale( sqlsrv_stmt* stmt, unsigned int paramno, zval* 
             column_size = 1;
             break;
         // size is not necessary for these types, they are inferred by ODBC
-        case IS_BOOL:
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		case IS_TRUE:
+		case IS_FALSE:
+#else
+		case IS_BOOL:
+#endif
         case IS_LONG:
         case IS_DOUBLE:
         case IS_RESOURCE:
@@ -1924,13 +2203,19 @@ void default_sql_size_and_scale( sqlsrv_stmt* stmt, unsigned int paramno, zval* 
     }
 }
 
-void field_cache_dtor( void* data )
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+void field_cache_dtor(zval* data)
+#else
+void field_cache_dtor(void* data)
+#endif
 {
     field_cache* cache = reinterpret_cast<field_cache*>( data );
     if( cache->value ) 
     {
         sqlsrv_free( cache->value );
     }
+	
 }
 
 
@@ -1950,25 +2235,29 @@ void finalize_output_parameters( sqlsrv_stmt* stmt TSRMLS_DC )
 
     for( zend_hash_internal_pointer_reset( params_ht );
          zend_hash_has_more_elements( params_ht ) == SUCCESS;
-         zend_hash_move_forward( params_ht ) ) {
+         zend_hash_move_forward( params_ht ) ) 
+	{
 
         sqlsrv_output_param *output_param;
         core::sqlsrv_zend_hash_get_current_data( *stmt, params_ht, (void**) &output_param TSRMLS_CC );
 
-        switch( Z_TYPE_P( output_param->param_z )) {
+        switch( Z_TYPE_P( output_param->param_z )) 
+		{
             case IS_STRING:
-                {
+				{
                     // adjust the length of the string to the value returned by SQLBindParameter in the ind_ptr parameter
                     char* str = Z_STRVAL_P( output_param->param_z );
                     SQLLEN str_len = stmt->param_ind_ptrs[ output_param->param_num ];
-                    if( str_len == SQL_NULL_DATA ) {
+                    if( str_len == SQL_NULL_DATA ) 
+					{
                         ZVAL_NULL( output_param->param_z );
                         continue;
                     }
 
                     // if there was more to output than buffer size to hold it, then throw a truncation error
                     int null_size = 0;
-                    switch( output_param->encoding ) {
+                    switch( output_param->encoding ) 
+					{
                         case SQLSRV_ENCODING_UTF8:
                             null_size = sizeof( wchar_t );  // string isn't yet converted to UTF-8, still UTF-16
                             break;
@@ -1983,40 +2272,56 @@ void finalize_output_parameters( sqlsrv_stmt* stmt TSRMLS_DC )
                             break;
                     }
                     CHECK_CUSTOM_ERROR( str_len > ( output_param->original_buffer_len - null_size ), stmt,
-                                         SQLSRV_ERROR_OUTPUT_PARAM_TRUNCATED, output_param->param_num + 1 ) {
+                                         SQLSRV_ERROR_OUTPUT_PARAM_TRUNCATED, output_param->param_num + 1 ) 
+					{
                         throw core::CoreException();
                     }
 
                     // if it's not in the 8 bit encodings, then it's in UTF-16
-                    if( output_param->encoding != SQLSRV_ENCODING_CHAR && output_param->encoding != SQLSRV_ENCODING_BINARY ) {
-
-                        bool converted = convert_string_from_utf16_inplace( output_param->encoding, &str, str_len );
-                        CHECK_CUSTOM_ERROR( !converted, stmt, SQLSRV_ERROR_OUTPUT_PARAM_ENCODING_TRANSLATE, get_last_error_message()) {
+                    if( output_param->encoding != SQLSRV_ENCODING_CHAR && output_param->encoding != SQLSRV_ENCODING_BINARY ) 
+					{
+						str_len/=sizeof(WCHAR);
+						sqlsrv_malloc_auto_ptr<char> buffer( convert_string_from_utf16( output_param->encoding, (LPCWSTR)str, str_len) );
+						CHECK_CUSTOM_ERROR( !buffer, stmt, SQLSRV_ERROR_OUTPUT_PARAM_ENCODING_TRANSLATE, get_last_error_message()) 
+						{
                             throw core::CoreException();
                         }
+						char *tmp = str;
+						str = (char *)buffer.transferred();
+						buffer = tmp;
                     }
-                    else if( output_param->encoding == SQLSRV_ENCODING_BINARY && str_len < output_param->original_buffer_len ) {
+                    else if( output_param->encoding == SQLSRV_ENCODING_BINARY && str_len < output_param->original_buffer_len ) 
+					{
                         // ODBC doesn't null terminate binary encodings, but PHP complains if a string isn't null terminated
                         // so we do that here if the length of the returned data is less than the original allocation.  The 
                         // original allocation null terminates the buffer already.
                         str[ str_len ] = '\0';
                     }
                     // set the string length
-                    ZVAL_STRINGL( output_param->param_z, str, str_len, 0 );
-                }
-                break;
+					//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+                    ZVAL_STRINGL( output_param->param_z, str, str_len );
+#else
+					ZVAL_STRINGL(output_param->param_z, str, str_len, 0);
+#endif
+				}
+				break;
+
             case IS_LONG:
                 // for a long or a float, simply check if NULL was returned and set the parameter to a PHP null if so
-                if( stmt->param_ind_ptrs[ output_param->param_num ] == SQL_NULL_DATA ) {
+                if( stmt->param_ind_ptrs[ output_param->param_num ] == SQL_NULL_DATA ) 
+				{
                     ZVAL_NULL( output_param->param_z );
                 }
-                else if( output_param->is_bool ) {
+                else if( output_param->is_bool ) 
+				{
                     convert_to_boolean( output_param->param_z );
                 }
                 break;
             case IS_DOUBLE:
                 // for a long or a float, simply check if NULL was returned and set the parameter to a PHP null if so
-                if( stmt->param_ind_ptrs[ output_param->param_num ] == SQL_NULL_DATA ) {
+                if( stmt->param_ind_ptrs[ output_param->param_num ] == SQL_NULL_DATA ) 
+				{
                     ZVAL_NULL( output_param->param_z );
                 }
                 break;
@@ -2043,17 +2348,20 @@ void get_field_as_string( sqlsrv_stmt* stmt, SQLUSMALLINT field_index, sqlsrv_ph
     SQLLEN sql_display_size = 0;
     char* field_value_temp = NULL;
 
-    try {
+    try 
+	{
 
         DEBUG_SQLSRV_ASSERT( sqlsrv_php_type.typeinfo.type == SQLSRV_PHPTYPE_STRING, 
                              "Type should be SQLSRV_PHPTYPE_STRING in get_field_as_string" );
         
-        if( sqlsrv_php_type.typeinfo.encoding == SQLSRV_ENCODING_DEFAULT ) {
+        if( sqlsrv_php_type.typeinfo.encoding == SQLSRV_ENCODING_DEFAULT ) 
+		{
             sqlsrv_php_type.typeinfo.encoding = stmt->conn->encoding();
         }        
 
         // Set the C type and account for null characters at the end of the data.
-        switch( sqlsrv_php_type.typeinfo.encoding ) {
+        switch( sqlsrv_php_type.typeinfo.encoding ) 
+		{
             case CP_UTF8:
                 c_type = SQL_C_WCHAR;
                 extra = sizeof( SQLWCHAR );
@@ -2075,8 +2383,8 @@ void get_field_as_string( sqlsrv_stmt* stmt, SQLUSMALLINT field_index, sqlsrv_ph
         calc_string_size( stmt, field_index, sql_field_type, sql_display_size TSRMLS_CC );
 
         // if this is a large type, then read the first few bytes to get the actual length from SQLGetData
-        if( sql_display_size == 0 || sql_display_size == LONG_MAX || 
-            sql_display_size == LONG_MAX >> 1 || sql_display_size == ULONG_MAX - 1 ) {
+        if( sql_display_size == 0 || sql_display_size == LONG_MAX || sql_display_size == LONG_MAX >> 1 || sql_display_size == ULONG_MAX - 1 ) 
+		{
 
             field_len_temp = INITIAL_FIELD_STRING_LEN;
             
@@ -2085,40 +2393,47 @@ void get_field_as_string( sqlsrv_stmt* stmt, SQLUSMALLINT field_index, sqlsrv_ph
             r = stmt->current_results->get_data( field_index + 1, c_type, field_value_temp, ( field_len_temp + extra ), 
                                                  &field_len_temp, false /*handle_warning*/ TSRMLS_CC );
             
-            CHECK_CUSTOM_ERROR( (r == SQL_NO_DATA), stmt, SQLSRV_ERROR_NO_DATA, field_index ) {
+            CHECK_CUSTOM_ERROR( (r == SQL_NO_DATA), stmt, SQLSRV_ERROR_NO_DATA, field_index ) 
+			{
                 throw core::CoreException ();
             } 
 
-            if( field_len_temp == SQL_NULL_DATA ) {
+            if( field_len_temp == SQL_NULL_DATA ) 
+			{
                 *field_value = NULL;
                 sqlsrv_free( field_value_temp );
                 return;
             }
 
-            if( r == SQL_SUCCESS_WITH_INFO ) {
+            if( r == SQL_SUCCESS_WITH_INFO ) 
+			{
 
                 SQLCHAR state[ SQL_SQLSTATE_BUFSIZE ];
                 SQLSMALLINT len;
                 
                 stmt->current_results->get_diag_field( 1, SQL_DIAG_SQLSTATE, state, SQL_SQLSTATE_BUFSIZE, &len TSRMLS_CC );
                     
-                if( is_truncated_warning( state ) ) {
+                if( is_truncated_warning( state ) ) 
+				{
                         
-                    SQLINTEGER dummy_field_len;
+                    SQLLEN dummy_field_len;
 
                     // for XML (and possibly other conditions) the field length returned is not the real field length, so
                     // in every pass, we double the allocation size to retrieve all the contents.
-                    if( field_len_temp == SQL_NO_TOTAL ) {
+                    if( field_len_temp == SQL_NO_TOTAL ) 
+					{
                     
                         // reset the field_len_temp
                         field_len_temp = INITIAL_FIELD_STRING_LEN;
 
-                        do {
+                        do 
+						{
 
-                            SQLINTEGER initial_field_len = field_len_temp;
+                            SQLLEN initial_field_len = field_len_temp;
                             // Double the size. 
                             field_len_temp *= 2;
                             
+
                             field_value_temp = static_cast<char*>( sqlsrv_realloc( field_value_temp, field_len_temp + extra + 1 ));
                             
                             field_len_temp -= initial_field_len;
@@ -2142,7 +2457,8 @@ void get_field_as_string( sqlsrv_stmt* stmt, SQLUSMALLINT field_index, sqlsrv_ph
 
                         } while( r == SQL_SUCCESS_WITH_INFO && is_truncated_warning( state ));
                     }
-                    else {
+                    else 
+					{
 
                         // We got the field_len_temp from SQLGetData call.
                         field_value_temp = static_cast<char*>( sqlsrv_realloc( field_value_temp, field_len_temp + extra + 1 ));
@@ -2155,13 +2471,15 @@ void get_field_as_string( sqlsrv_stmt* stmt, SQLUSMALLINT field_index, sqlsrv_ph
                                                              field_len_temp + extra, &dummy_field_len, 
                                                              true /*handle_warning*/ TSRMLS_CC );
 
-                        if( dummy_field_len == SQL_NULL_DATA ) {
+                        if( dummy_field_len == SQL_NULL_DATA ) 
+						{
                             *field_value = NULL;
                             sqlsrv_free( field_value_temp );
                             return;
                         }
                        
-                        CHECK_CUSTOM_ERROR( (r == SQL_NO_DATA), stmt, SQLSRV_ERROR_NO_DATA, field_index ) {
+                        CHECK_CUSTOM_ERROR( (r == SQL_NO_DATA), stmt, SQLSRV_ERROR_NO_DATA, field_index ) 
+						{
                             throw core::CoreException ();
                         } 
                         
@@ -2169,36 +2487,43 @@ void get_field_as_string( sqlsrv_stmt* stmt, SQLUSMALLINT field_index, sqlsrv_ph
                     }
 
                 } // if( is_truncation_warning ( state ) )
-                else {
-                    CHECK_SQL_ERROR_OR_WARNING( r, stmt ) {
+                else 
+				{
+                    CHECK_SQL_ERROR_OR_WARNING( r, stmt ) 
+					{
                         throw core::CoreException();
                     }
                 }
             }  // if( r == SQL_SUCCESS_WITH_INFO )
 
-            if( sqlsrv_php_type.typeinfo.encoding == SQLSRV_ENCODING_UTF8 ) {
-
-                bool converted = convert_string_from_utf16_inplace( static_cast<SQLSRV_ENCODING>( sqlsrv_php_type.typeinfo.encoding ),
-                                                            &field_value_temp, field_len_temp );
-                
-                CHECK_CUSTOM_ERROR( !converted, stmt, SQLSRV_ERROR_FIELD_ENCODING_TRANSLATE, get_last_error_message() ) {
-                    throw core::CoreException ();
-                } 
+            if( sqlsrv_php_type.typeinfo.encoding == SQLSRV_ENCODING_UTF8 ) 
+			{
+				char *oldPtr = field_value_temp;
+				field_len_temp /= sizeof(WCHAR);
+				field_value_temp = WideCharToUTF8((LPCWSTR)oldPtr, field_len_temp).transferred();
+				sqlsrv_free(oldPtr);
+				CHECK_CUSTOM_ERROR( !field_value_temp, stmt, SQLSRV_ERROR_FIELD_ENCODING_TRANSLATE, get_last_error_message() ) 
+				{
+					throw core::CoreException ();
+				}
             }
         } // if ( sql_display_size == 0 || sql_display_size == LONG_MAX .. ) 
         
-        else if( sql_display_size >= 1 && sql_display_size <= SQL_SERVER_MAX_FIELD_SIZE ) {
+        else if( sql_display_size >= 1 && sql_display_size <= SQL_SERVER_MAX_FIELD_SIZE ) 
+		{
 
             // only allow binary retrievals for char and binary types.  All others get a string converted
             // to the encoding type they asked for.
           
             // null terminator
-            if( c_type == SQL_C_CHAR ) {
+            if( c_type == SQL_C_CHAR ) 
+			{
                 sql_display_size += sizeof( SQLCHAR );
             }
 
             // For WCHAR multiply by sizeof(WCHAR) and include the null terminator
-            else if( c_type == SQL_C_WCHAR ) {
+            else if( c_type == SQL_C_WCHAR ) 
+			{
                 sql_display_size = (sql_display_size * sizeof(WCHAR)) + sizeof(WCHAR);  
             }
 
@@ -2207,31 +2532,37 @@ void get_field_as_string( sqlsrv_stmt* stmt, SQLUSMALLINT field_index, sqlsrv_ph
             // get the data
             r = stmt->current_results->get_data( field_index + 1, c_type, field_value_temp, sql_display_size, 
                                                  &field_len_temp, true /*handle_warning*/ TSRMLS_CC );
-            CHECK_SQL_ERROR( r, stmt ) {
+            CHECK_SQL_ERROR( r, stmt ) 
+			{
                 throw core::CoreException();
             }
-            CHECK_CUSTOM_ERROR( (r == SQL_NO_DATA), stmt, SQLSRV_ERROR_NO_DATA, field_index ) {
+            CHECK_CUSTOM_ERROR( (r == SQL_NO_DATA), stmt, SQLSRV_ERROR_NO_DATA, field_index ) 
+			{
                 throw core::CoreException ();
             } 
 
-            if( field_len_temp == SQL_NULL_DATA ) {
+            if( field_len_temp == SQL_NULL_DATA ) 
+			{
                 *field_value = NULL;
                 sqlsrv_free( field_value_temp );
                 return;
             }
             
-            if( sqlsrv_php_type.typeinfo.encoding == CP_UTF8 ) {
-
-                bool converted = convert_string_from_utf16_inplace( static_cast<SQLSRV_ENCODING>( sqlsrv_php_type.typeinfo.encoding ),
-                                                            &field_value_temp, field_len_temp );
-                    
-                CHECK_CUSTOM_ERROR( !converted, stmt, SQLSRV_ERROR_FIELD_ENCODING_TRANSLATE, get_last_error_message() ) {
+            if( sqlsrv_php_type.typeinfo.encoding == CP_UTF8 ) 
+			{
+				char *oldPtr = field_value_temp;
+				field_len_temp /= sizeof(WCHAR);
+				field_value_temp = WideCharToUTF8((LPCWSTR)oldPtr, field_len_temp).transferred();
+				sqlsrv_free(oldPtr);
+				CHECK_CUSTOM_ERROR( !field_value_temp, stmt, SQLSRV_ERROR_FIELD_ENCODING_TRANSLATE, get_last_error_message() ) 
+				{
                     throw core::CoreException ();
                 }
-           }
+            }
         } // else if( sql_display_size >= 1 && sql_display_size <= SQL_SERVER_MAX_FIELD_SIZE ) 
 
-        else {
+        else 
+		{
         
             DIE( "Invalid sql_display_size" );
             return; // to eliminate a warning
@@ -2247,14 +2578,16 @@ void get_field_as_string( sqlsrv_stmt* stmt, SQLUSMALLINT field_index, sqlsrv_ph
         field_value_temp[field_len_temp] = '\0';
     }
 
-    catch( core::CoreException& ) {
+    catch( core::CoreException& ) 
+	{
 
         *field_value = NULL;
         *field_len = 0;
         sqlsrv_free( field_value_temp );
         throw;
     }
-    catch ( ... ) {
+    catch ( ... ) 
+	{
 
         *field_value = NULL;
         *field_len = 0;
@@ -2353,7 +2686,7 @@ void resize_output_buffer_if_necessary( sqlsrv_stmt* stmt, zval* param_z, unsign
     // account for the NULL terminator returned by ODBC and needed by Zend to avoid a "String not null terminated" debug warning
     expected_len = column_size * elem_size + elem_size;
 
-    // binary fields aren't null terminated, so we need to account for that in our buffer length calcuations
+    // binary fields aren't null terminated, so we need to account for that in our buffer length calculations
     buffer_null_extra = (c_type == SQL_C_BINARY) ? elem_size : 0;
 
     // this is the size of the string for Zend and for the StrLen parameter to SQLBindParameter
@@ -2376,7 +2709,11 @@ void resize_output_buffer_if_necessary( sqlsrv_stmt* stmt, zval* param_z, unsign
 
         // A zval string len doesn't include the null.  This calculates the length it should be
         // regardless of whether the ODBC type contains the NULL or not.
+#if PHP_MAJOR_VERSION >= 7
+		ZVAL_STRINGL(param_z, reinterpret_cast<char*>(buffer), without_null_len);
+#else
         ZVAL_STRINGL( param_z, reinterpret_cast<char*>( buffer ), without_null_len, 0 );
+#endif
 
         // null terminate the string to avoid a warning in debug PHP builds
         (static_cast<char*>(buffer))[ without_null_len ] = '\0';
@@ -2401,11 +2738,19 @@ void resize_output_buffer_if_necessary( sqlsrv_stmt* stmt, zval* param_z, unsign
 
 void save_output_param_for_later( sqlsrv_stmt* stmt, sqlsrv_output_param& param TSRMLS_DC )
 {
-    HashTable* param_ht = Z_ARRVAL_P( stmt->output_params );
-    int paramno = param.param_num;
-    core::sqlsrv_zend_hash_index_update( *stmt, param_ht, paramno, &param, sizeof( param )
-                                         TSRMLS_CC );
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	HashTable* param_ht = Z_ARRVAL_P(stmt->output_params);
+	int paramno = param.param_num;
+	core::sqlsrv_zend_hash_index_update(*stmt, param_ht, paramno, (zval *)&param, sizeof(param) TSRMLS_CC);
+	zval_add_ref(param.param_z);  
+#else
+	HashTable* param_ht = Z_ARRVAL_P(stmt->output_params);
+	int paramno = param.param_num;
+	core::sqlsrv_zend_hash_index_update(*stmt, param_ht, paramno, &param, sizeof(param)
+		TSRMLS_CC );
     zval_add_ref( &param.param_z );   // we have a reference to the param
+#endif
 }
 
 
@@ -2418,19 +2763,38 @@ void send_param_streams( sqlsrv_stmt* stmt TSRMLS_DC )
 
 
 // called by Zend for each parameter in the sqlsrv_stmt::output_params hash table when it is cleaned/destroyed
-
-void sqlsrv_output_param_dtor( void* data )
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+void sqlsrv_output_param_dtor(zval* data)
+#else
+void sqlsrv_output_param_dtor(void* data)
+#endif
 {
-    sqlsrv_output_param *output_param = reinterpret_cast<sqlsrv_output_param*>( data );
-    zval_ptr_dtor( &output_param->param_z ); // undo the reference to the string we will no longer hold
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	sqlsrv_stream* stream_encoding = reinterpret_cast<sqlsrv_stream*>(data);
+	zval_ptr_dtor(stream_encoding->stream_z); // undo the reference to the stream we will no longer hold
+#else
+	sqlsrv_stream* stream_encoding = reinterpret_cast<sqlsrv_stream*>(data);
+	zval_ptr_dtor(&stream_encoding->stream_z); // undo the reference to the stream we will no longer hold
+#endif
 }
 
 // called by Zend for each stream in the sqlsrv_stmt::param_streams hash table when it is cleaned/destroyed
-
-void sqlsrv_stream_dtor( void* data )
+#if PHP_MAJOR_VERSION >= 7
+void sqlsrv_stream_dtor(zval* data)
+#else
+void sqlsrv_stream_dtor(void* data)
+#endif
 {
-    sqlsrv_stream* stream_encoding = reinterpret_cast<sqlsrv_stream*>( data );
-    zval_ptr_dtor( &stream_encoding->stream_z ); // undo the reference to the stream we will no longer hold
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	sqlsrv_stream* stream_encoding = reinterpret_cast<sqlsrv_stream*>(data);
+	zval_ptr_dtor(stream_encoding->stream_z); // undo the reference to the stream we will no longer hold
+#else
+	sqlsrv_stream* stream_encoding = reinterpret_cast<sqlsrv_stream*>(data);
+	zval_ptr_dtor(&stream_encoding->stream_z); // undo the reference to the stream we will no longer hold
+#endif
 }
 
 }

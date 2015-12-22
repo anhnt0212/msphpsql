@@ -70,74 +70,52 @@ void core_sqlsrv_register_logger( log_callback driver_logger )
 // utf-16 string is released by this function if no errors occurred.  Otherwise the parameters are not changed
 // and false is returned.
 
-bool convert_string_from_utf16_inplace( SQLSRV_ENCODING encoding, char** string, SQLINTEGER& len)
+sqlsrv_malloc_auto_ptr<char> convert_string_from_utf16(SQLSRV_ENCODING encoding, LPCWSTR utf16_string, SQLLEN &cchLen)
 {
-    SQLSRV_ASSERT( string != NULL && *string != NULL, "String must be specified" );
-
-    // for the empty string, we simply returned we converted it
-    if( len == 0 && *string[0] == '\0' ) {
-        return true;
-    }
-
-    char* outString = NULL;
-    SQLINTEGER outLen = 0;
-    bool result = convert_string_from_utf16( encoding, reinterpret_cast<const wchar_t*>(*string), len / sizeof(wchar_t), &outString, outLen);
-
-    if (result)
-    {
-        sqlsrv_free( *string );
-        *string = outString;
-        len = outLen;
-    }
-
-    return result;
+	return WideCharToUTF8(utf16_string, cchLen, encoding==(SQLSRV_ENCODING)CP_UTF8 ? CP_UTF8 : 0 );
 }
 
-bool convert_string_from_utf16( SQLSRV_ENCODING encoding, const wchar_t* inString, SQLINTEGER cchInLen, char** outString, SQLINTEGER& cchOutLen )
+sqlsrv_malloc_auto_ptr<char> WideCharToUTF8( LPCWCH pStr, SQLLEN &refcch, UINT encoding)
 {
-    SQLSRV_ASSERT( inString != NULL, "Input string must be specified" );
-    SQLSRV_ASSERT( outString != NULL, "Output buffer pointer must be specified" );
-    SQLSRV_ASSERT( *outString == NULL, "Output buffer pointer must not be set" );
+	if ( pStr != NULL )
+	{
+		int cch = refcch;
+		if ( cch == -1 )
+			cch = (int)wcslen(pStr); // if cch is -1 , source has been declared as NTS.  Do our own count.
+		DWORD flags = 0; //WC_ERR_INVALID_CHARS;
+		int cbConverted = WideCharToMultiByte(encoding, flags, pStr, cch, NULL, 0, NULL, NULL);
+		sqlsrv_malloc_auto_ptr<char> pszConverted( (char *)sqlsrv_malloc((size_t)cbConverted+1) );
+			
+		if ( !cbConverted || 
+				WideCharToMultiByte(encoding, flags, pStr, cch, pszConverted.get(), cbConverted+1, NULL, NULL) )
+		{
+			pszConverted[refcch=cbConverted] = 0; // null terminate string.  Have to treat source str as non-nts.
+			return pszConverted;
+		}
+	}
+	refcch = 0;
+	return sqlsrv_malloc_auto_ptr<char>();
 
-    if (cchInLen == 0 && inString[0] == L'\0') {
-        *outString = reinterpret_cast<char*>( sqlsrv_malloc ( 1 ) );
-        *outString[0] = '\0';
-        cchOutLen = 0;
-        return true;
-    }
-
-    // flags set to 0 by default, which means that any invalid characters are dropped rather than causing
-    // an error.   This happens only on XP.
-    DWORD flags = 0;
-    if( encoding == CP_UTF8 && g_osversion.dwMajorVersion >= SQLSRV_OS_VISTA_OR_LATER ) {
-        // Vista (and later) will detect invalid UTF-16 characters and raise an error.
-        flags = WC_ERR_INVALID_CHARS;
-    }
-
-    // calculate the number of characters needed
-    cchOutLen = WideCharToMultiByte( encoding, flags,
-                                   inString, cchInLen, 
-                                   NULL, 0, NULL, NULL );
-    if( cchOutLen == 0 ) {
-        return false;
-    }
-
-    // Create a buffer to fit the encoded string
-    char* newString = reinterpret_cast<char*>( sqlsrv_malloc( cchOutLen + 1 /* NULL char*/ ));
-    int rc = WideCharToMultiByte( encoding, flags,
-                                  inString, cchInLen, 
-                                  newString, cchOutLen, NULL, NULL );
-    if( rc == 0 ) {
-        cchOutLen = 0;
-        sqlsrv_free( newString );
-        return false;
-    }
-
-    *outString = newString;
-    newString[cchOutLen] = '\0';   // null terminate the encoded string
-
-    return true;
 }
+
+int WideCharToUTF8Buffer( unsigned char *pUtf8, size_t cbUtf8, LPCWCH pStr, int cch )
+{
+	if ( !pUtf8 || !cbUtf8 )
+		return 0;
+
+	if ( !pStr || !cch || !*pStr )
+	{
+		*pUtf8 = 0;
+		return 0;
+	}
+
+	// if cch is -1 , source has been declared as NTS
+
+	int cbConverted = WideCharToMultiByte(CP_UTF8, 0, pStr, cch, (char *)pUtf8, cbUtf8-1, NULL, NULL);
+	pUtf8[ cbConverted ] = 0; // cbConverted guaranteed to be less than cbUtf8
+	return cbConverted;
+}
+
 
 
 // thin wrapper around convert_string_from_default_encoding that handles
@@ -183,7 +161,9 @@ bool core_sqlsrv_get_odbc_error( sqlsrv_context& ctx, int record_number, sqlsrv_
     zval* temp = NULL;
     SQLRETURN r = SQL_SUCCESS;
     SQLSMALLINT wmessage_len = 0;
+    SQLLEN message_len = 0;
     SQLWCHAR wsqlstate[ SQL_SQLSTATE_BUFSIZE ];
+	SQLLEN sqlstate_len = ARRAYELEMENTS(wsqlstate);
     SQLWCHAR wnative_message[ SQL_MAX_MESSAGE_LENGTH + 1 ];
     SQLSRV_ENCODING enc = ctx.encoding();
 
@@ -196,7 +176,7 @@ bool core_sqlsrv_get_odbc_error( sqlsrv_context& ctx, int record_number, sqlsrv_
 
                     error = stmt->current_results->get_diag_rec( record_number );
                     // don't use the CHECK* macros here since it will trigger reentry into the error handling system
-                    if( error == NULL ) {
+                    if( !error ) {
                         return false;
                     }
                     break;
@@ -212,20 +192,16 @@ bool core_sqlsrv_get_odbc_error( sqlsrv_context& ctx, int record_number, sqlsrv_
         default:
 
             error = new ( sqlsrv_malloc( sizeof( sqlsrv_error ))) sqlsrv_error();
-            r = SQLGetDiagRecW( h_type, h, record_number, wsqlstate, &error->native_code, wnative_message,
-                                SQL_MAX_MESSAGE_LENGTH + 1, &wmessage_len );
+            r = SQLGetDiagRecW( h_type, h, record_number, wsqlstate, &error->native_code, wnative_message, ARRAYELEMENTS(wnative_message), &wmessage_len );
             // don't use the CHECK* macros here since it will trigger reentry into the error handling system
             if( !SQL_SUCCEEDED( r ) || r == SQL_NO_DATA ) {
                 return false;
             }
-
-            SQLINTEGER sqlstate_len = 0;
-            convert_string_from_utf16(enc, wsqlstate, sizeof(wsqlstate), (char**)&error->sqlstate, sqlstate_len);
-
-            SQLINTEGER message_len = 0;
-            convert_string_from_utf16(enc, wnative_message, wmessage_len, (char**)&error->native_message, message_len);
+			message_len = wmessage_len;
+			error->sqlstate = (SQLCHAR *)convert_string_from_utf16( enc, wsqlstate, sqlstate_len).transferred();
+			error->native_message = (SQLCHAR *)convert_string_from_utf16( enc, wnative_message, message_len).transferred();
             break;
-    }
+	}
 
 
     // log the error first

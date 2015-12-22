@@ -21,7 +21,16 @@
 
 #include "php_sqlsrv.h"
 
+
+
+
 #include <windows.h>
+
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+#include "zend_utility.h"
+#endif
+
 
 namespace {
     
@@ -36,13 +45,24 @@ char log_msg[ LOG_MSG_SIZE ];
 SQLCHAR INTERNAL_FORMAT_ERROR[] = "An internal error occurred.  FormatMessage failed writing an error message.";
 
 // *** internal functions ***
-void copy_error_to_zval( zval** error_z, sqlsrv_error_const* error, zval** reported_chain, zval** ignored_chain, 
-                                bool warning TSRMLS_DC );
+#if PHP_MAJOR_VERSION >= 7
+zval copy_error_to_zval(sqlsrv_error_const* error, zval** reported_chain, zval** ignored_chain,
+	bool warning TSRMLS_DC);
+#else
+void copy_error_to_zval(zval** error_z, sqlsrv_error_const* error, zval** reported_chain, zval** ignored_chain,
+	bool warning TSRMLS_DC);
+#endif
 bool ignore_warning( char* sql_state, int native_code TSRMLS_DC );
 bool handle_errors_and_warnings( sqlsrv_context& ctx, zval** reported_chain, zval** ignored_chain, logging_severity log_severity, 
                                  unsigned int sqlsrv_error_code, bool warning, va_list* print_args TSRMLS_DC );
 
-int  sqlsrv_merge_zend_hash_dtor( void* dest TSRMLS_DC );
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+int  sqlsrv_merge_zend_hash_dtor(zval* dest TSRMLS_DC);
+#else
+int  sqlsrv_merge_zend_hash_dtor(void* dest TSRMLS_DC);
+#endif
+
 bool sqlsrv_merge_zend_hash( __inout zval* dest_z, zval const* src_z TSRMLS_DC );
 
 }
@@ -368,19 +388,30 @@ ss_error SS_ERRORS[] = {
     },
 
     // terminate the list of errors/warnings
-    { -1, {} }
+	
+	//PHP7 Port : Replaced -1 to satisfy the warning
+    { 0XFFFFFFFF, {} }
 };
 
 sqlsrv_error_const* get_error_message( unsigned int sqlsrv_error_code ) {
     
     sqlsrv_error_const *error_message = NULL;
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	if( (error_message = (sqlsrv_error_const *) zend_hash_index_find(g_ss_errors_ht, sqlsrv_error_code)) == NULL )
+	{
+		// PROPERLY CONVERT zval to sqlsrv_error_const 
+		DIE("get_error_message: zend_hash_index_find returned failure for sqlsrv_error_code = %1!d!", sqlsrv_error_code);
+	}
+#else
     int zr = zend_hash_index_find( g_ss_errors_ht, sqlsrv_error_code, reinterpret_cast<void**>( &error_message ));
-    if( zr == FAILURE ) {
+    if( zr == FAILURE ) 
+	{
         DIE( "get_error_message: zend_hash_index_find returned failure for sqlsrv_error_code = %1!d!", sqlsrv_error_code );   
     }
+#endif
     
-    SQLSRV_ASSERT( error_message != NULL, "get_error_message: error_message was null");
-
+	SQLSRV_ASSERT( error_message != NULL, "get_error_message: error_message was null");
     return error_message;
 }
 
@@ -408,8 +439,8 @@ bool ss_error_handler(sqlsrv_context& ctx, unsigned int sqlsrv_error_code, bool 
         severity = SEV_WARNING;
     }
 
-    return handle_errors_and_warnings( ctx, &SQLSRV_G( errors ), &SQLSRV_G( warnings ), severity, sqlsrv_error_code, warning, 
-                                       print_args TSRMLS_CC );
+	return handle_errors_and_warnings(ctx, &SQLSRV_G(errors), &SQLSRV_G(warnings), severity, sqlsrv_error_code, warning,
+		print_args TSRMLS_CC);
 }
 
 // sqlsrv_errors( [int $errorsAndOrWarnings] )
@@ -449,66 +480,117 @@ bool ss_error_handler(sqlsrv_context& ctx, unsigned int sqlsrv_error_code, bool 
 //         )
 // )
 
+
 PHP_FUNCTION( sqlsrv_errors )
 {
-    SQLSRV_UNUSED( return_value_used );
-    SQLSRV_UNUSED( this_ptr );
-    SQLSRV_UNUSED( return_value_ptr );
+	//PHP7 Port
+#if PHP_MAJOR_VERSION < 7
+	SQLSRV_UNUSED(return_value_used);
+	SQLSRV_UNUSED(this_ptr);
+	SQLSRV_UNUSED(return_value_ptr);
+#endif
 
     long flags = SQLSRV_ERR_ALL;
-    full_mem_check(MEMCHECK_SILENT);
+	//PHP7 Port
+#if PHP_MAJOR_VERSION < 7 
+	full_mem_check(MEMCHECK_SILENT);
+#endif
 
     LOG_FUNCTION( "sqlsrv_errors" );
 
-    if( zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "|l", &flags ) == FAILURE ) {
-
+    if( zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "|l", &flags ) == FAILURE ) 
+	{
         LOG(SEV_ERROR, "An invalid parameter was passed to %1!s!.", _FN_ );
         RETURN_FALSE;
     }
 
-    if( flags == SQLSRV_ERR_ALL ) {
-        
+    if( flags == SQLSRV_ERR_ALL ) 
+	{
         int result;
-        zval_auto_ptr both_z;
-        
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		zval both_z;
+		result = array_init(&both_z);
+#else
+		zval_auto_ptr both_z;
         MAKE_STD_ZVAL( both_z );
-        result = array_init( both_z );
-        if( result == FAILURE ) {
-
+		result = array_init(both_z);
+#endif
+        
+        if( result == FAILURE ) 
+		{
             RETURN_FALSE;
         }
 
-        if( Z_TYPE_P( SQLSRV_G( errors )) == IS_ARRAY && !sqlsrv_merge_zend_hash( both_z, SQLSRV_G( errors ) TSRMLS_CC )) {
+#if PHP_MAJOR_VERSION >= 7
+		if (Z_TYPE_P(SQLSRV_G(errors)) == IS_ARRAY && !sqlsrv_merge_zend_hash(&both_z, SQLSRV_G(errors) TSRMLS_CC)) {
 
-            RETURN_FALSE;
-        }
-            
-        if( Z_TYPE_P( SQLSRV_G( warnings )) == IS_ARRAY && !sqlsrv_merge_zend_hash( both_z, SQLSRV_G( warnings ) TSRMLS_CC )) {
+			RETURN_FALSE;
+		}
 
-            RETURN_FALSE;
-        }
+		if (Z_TYPE_P(SQLSRV_G(warnings)) == IS_ARRAY && !sqlsrv_merge_zend_hash(&both_z, SQLSRV_G(warnings) TSRMLS_CC)) {
 
-        if( zend_hash_num_elements( Z_ARRVAL_P( both_z )) == 0 ) {
+			RETURN_FALSE;
+		}
 
-            RETURN_NULL(); 
-        }
 
-        zval_ptr_dtor( &return_value );
-        *return_value_ptr = both_z;
-        both_z.transferred();
+		if (zend_hash_num_elements(Z_ARRVAL(both_z)) == 0) {
+
+			RETURN_NULL();
+		}
+#else
+		if (Z_TYPE_P(SQLSRV_G(errors)) == IS_ARRAY && !sqlsrv_merge_zend_hash(both_z, SQLSRV_G(errors) TSRMLS_CC)) {
+
+			RETURN_FALSE;
+		}
+
+		if (Z_TYPE_P(SQLSRV_G(warnings)) == IS_ARRAY && !sqlsrv_merge_zend_hash(both_z, SQLSRV_G(warnings) TSRMLS_CC)) {
+
+			RETURN_FALSE;
+		}
+
+
+		if (zend_hash_num_elements(Z_ARRVAL_P(both_z)) == 0) {
+
+			RETURN_NULL();
+		}
+#endif
+        
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		zval_ptr_dtor(return_value);
+		RETURN_ARR(Z_ARRVAL(both_z));
+#else
+		zval_ptr_dtor(&return_value);
+		*return_value_ptr = both_z;
+		both_z.transferred();
+#endif
     }
 
     else if( flags == SQLSRV_ERR_WARNINGS ) {
 
-        zval_ptr_dtor( &return_value );
-        *return_value_ptr = SQLSRV_G( warnings );
-        zval_add_ref( &SQLSRV_G( warnings ));
+#if PHP_MAJOR_VERSION >= 7
+		zval_ptr_dtor(return_value);
+		RETURN_ARR(Z_ARRVAL_P(SQLSRV_G(warnings)));
+		zval_add_ref(SQLSRV_G(warnings));
+#else
+		zval_ptr_dtor(&return_value);
+		*return_value_ptr = SQLSRV_G(warnings);
+		zval_add_ref(&SQLSRV_G(warnings));
+#endif
+        
     }
     else {
-
-        zval_ptr_dtor( &return_value );
-        *return_value_ptr = SQLSRV_G( errors );
-        zval_add_ref( &SQLSRV_G( errors ));
+#if PHP_MAJOR_VERSION >= 7
+		zval_ptr_dtor(return_value);
+		RETURN_ARR(Z_ARRVAL_P(SQLSRV_G(errors)));
+		zval_add_ref(SQLSRV_G(errors));
+#else
+		zval_ptr_dtor(&return_value);
+		*return_value_ptr = SQLSRV_G(errors);
+		zval_add_ref(&SQLSRV_G(errors));
+#endif
+        
     }
 }
 
@@ -529,9 +611,12 @@ PHP_FUNCTION( sqlsrv_errors )
 
 PHP_FUNCTION( sqlsrv_configure )
 {
-    SQLSRV_UNUSED( return_value_used );
-    SQLSRV_UNUSED( this_ptr );
-    SQLSRV_UNUSED( return_value_ptr );
+	//PHP7 Port
+#if PHP_MAJOR_VERSION < 7
+	SQLSRV_UNUSED(return_value_used);
+	SQLSRV_UNUSED(this_ptr);
+	SQLSRV_UNUSED(return_value_ptr);
+#endif
 
     LOG_FUNCTION( "sqlsrv_configure" );
 
@@ -557,7 +642,8 @@ PHP_FUNCTION( sqlsrv_configure )
         }
 
         // WarningsReturnAsErrors
-        if( !stricmp( option, INI_WARNINGS_RETURN_AS_ERRORS )) {
+		//PHP Port 7
+		if (!_stricmp(option, INI_WARNINGS_RETURN_AS_ERRORS)) {
 
             SQLSRV_G( warnings_return_as_errors ) = zend_is_true( value_z ) ? true : false;
             LOG( SEV_NOTICE, INI_PREFIX INI_WARNINGS_RETURN_AS_ERRORS " = %1!s!", SQLSRV_G( warnings_return_as_errors ) ? "On" : "Off");
@@ -565,7 +651,8 @@ PHP_FUNCTION( sqlsrv_configure )
         }
 
         // LogSeverity
-        else if( !stricmp( option, INI_LOG_SEVERITY )) {
+		//PHP Port 7
+		else if (!_stricmp(option, INI_LOG_SEVERITY)) {
 
             CHECK_CUSTOM_ERROR(( Z_TYPE_P( value_z ) != IS_LONG ), error_ctx, SS_SQLSRV_ERROR_INVALID_FUNCTION_PARAMETER, _FN_ ) {
             
@@ -584,7 +671,7 @@ PHP_FUNCTION( sqlsrv_configure )
         }
 
         // LogSubsystems
-        else if( !stricmp( option, INI_LOG_SUBSYSTEMS )) {
+		else if (!_stricmp(option, INI_LOG_SUBSYSTEMS)) {
 
             CHECK_CUSTOM_ERROR(( Z_TYPE_P( value_z ) != IS_LONG ), error_ctx, SS_SQLSRV_ERROR_INVALID_FUNCTION_PARAMETER, _FN_ ) {
 
@@ -602,7 +689,7 @@ PHP_FUNCTION( sqlsrv_configure )
             RETURN_TRUE;
         }
 
-        else if( !stricmp( option, INI_BUFFERED_QUERY_LIMIT )) {
+        else if( !_stricmp( option, INI_BUFFERED_QUERY_LIMIT )) {
             
             CHECK_CUSTOM_ERROR(( Z_TYPE_P( value_z ) != IS_LONG ), error_ctx, SQLSRV_ERROR_INVALID_BUFFER_LIMIT, _FN_ ) {
 
@@ -653,9 +740,13 @@ PHP_FUNCTION( sqlsrv_configure )
 
 PHP_FUNCTION( sqlsrv_get_config )
 {
-    SQLSRV_UNUSED( return_value_used );
-    SQLSRV_UNUSED( this_ptr );
-    SQLSRV_UNUSED( return_value_ptr );
+	non_supported_function("sqlsrv_get_config");
+	//PHP7 Port
+#if PHP_MAJOR_VERSION < 7
+	SQLSRV_UNUSED(return_value_used);
+	SQLSRV_UNUSED(this_ptr);
+	SQLSRV_UNUSED(return_value_ptr);
+#endif
 
     char* option = NULL;
     int option_len;
@@ -677,22 +768,22 @@ PHP_FUNCTION( sqlsrv_get_config )
             throw ss::SSException();        
         }
         
-        if( !stricmp( option, INI_WARNINGS_RETURN_AS_ERRORS )) {
+        if( !_stricmp( option, INI_WARNINGS_RETURN_AS_ERRORS )) {
 
             ZVAL_BOOL( return_value, SQLSRV_G( warnings_return_as_errors ));
             return;
         }
-        else if( !stricmp( option, INI_LOG_SEVERITY )) {
+        else if( !_stricmp( option, INI_LOG_SEVERITY )) {
 
             ZVAL_LONG( return_value, SQLSRV_G( log_severity ));
             return;
         }
-        else if( !stricmp( option, INI_LOG_SUBSYSTEMS )) {
+        else if( !_stricmp( option, INI_LOG_SUBSYSTEMS )) {
 
             ZVAL_LONG( return_value, SQLSRV_G( log_subsystems ));
             return;
         }
-        else if( !stricmp( option, INI_BUFFERED_QUERY_LIMIT )) {
+        else if( !_stricmp( option, INI_BUFFERED_QUERY_LIMIT )) {
 
             ZVAL_LONG( return_value, SQLSRV_G( buffered_query_limit ));
             return;
@@ -715,94 +806,200 @@ PHP_FUNCTION( sqlsrv_get_config )
 
 namespace {
 
-void copy_error_to_zval( zval** error_z, sqlsrv_error_const* error, zval** reported_chain, zval** ignored_chain, 
-                         bool warning TSRMLS_DC )
+#if PHP_MAJOR_VERSION >= 7
+	zval copy_error_to_zval(sqlsrv_error_const* error, zval** reported_chain, zval** ignored_chain,
+		bool warning TSRMLS_DC)
+#else
+void copy_error_to_zval(zval** error_z, sqlsrv_error_const* error, zval** reported_chain, zval** ignored_chain,
+	bool warning TSRMLS_DC)
+#endif
 {
-    MAKE_STD_ZVAL( *error_z );
-    
-    if( array_init( *error_z ) == FAILURE ) {
-        DIE( "Fatal error during error processing" );
-    }
+#if PHP_MAJOR_VERSION >= 7
+	zval error_z;
+	array_init(&error_z);
+#else
+	MAKE_STD_ZVAL(*error_z);
 
-    // sqlstate
-    zval_auto_ptr temp;
-    MAKE_STD_ZVAL( temp );
-    ZVAL_STRINGL( temp, reinterpret_cast<char*>( error->sqlstate ), SQL_SQLSTATE_SIZE, 1 );
-    zval_add_ref( &temp );
-    if( add_next_index_zval( *error_z, temp ) == FAILURE ) {
-        DIE( "Fatal error during error processing" );
-    }
+	if (array_init(*error_z) == FAILURE)
+	{
+		DIE("Fatal error during error processing");
+	}
+#endif
 
-    if( add_assoc_zval( *error_z, "SQLSTATE", temp ) == FAILURE ) {
-        DIE( "Fatal error during error processing" );
-    }
-    temp.transferred();
+#if PHP_MAJOR_VERSION >= 7
 
-    // native_code
-    if( add_next_index_long( *error_z,  error->native_code ) == FAILURE ) {
-        DIE( "Fatal error during error processing" );
-    }
+	// sqlstate & native message strings , using PHP heap manager here
+	zval strSQLState;
+	ZVAL_STRINGL(&strSQLState, reinterpret_cast<char*>(error->sqlstate), SQL_SQLSTATE_SIZE);
 
-    if( add_assoc_long( *error_z, "code", error->native_code ) == FAILURE ) {
-        DIE( "Fatal error during error processing" );
-    }
+	zval strNativeMessage;
+	ZVAL_STRING(&strNativeMessage, reinterpret_cast<char*>(error->native_message));
 
-    // native_message
-    MAKE_STD_ZVAL( temp );
-    ZVAL_STRING( temp, reinterpret_cast<char*>( error->native_message), 1 );
-    zval_add_ref( &temp );
-    if( add_next_index_zval( *error_z, temp ) == FAILURE ) {
-        DIE( "Fatal error during error processing" );
-    }
+	/*
+		The associative array/hash table we are creating will look like :
 
-    if( add_assoc_zval( *error_z, "message", temp ) == FAILURE ) {
-        DIE( "Fatal error during error processing" );
-    }
-    temp.transferred();
+		[0] => Array
+		(
+		[0] => IMSSP					
+		[SQLSTATE] => IMSSP														SQL_STATE	
+		[1] => -14
+		[code] => -14															NATIVE_CODE
+		[2] => An invalid parameter was passed to sqlsrv_execute.
+		[message] => An invalid parameter was passed to sqlsrv_execute.			NATIVE_MESSAGE
+		)
+	*/
 
-    // If it is an error or if warning_return_as_errors is true than
-    // add the error or warning to the reported_chain.
-    if( !warning || SQLSRV_G( warnings_return_as_errors ) )
-    {
-        // if the warning is part of the ignored warning list than 
-        // add to the ignored chain if the ignored chain is not null.
-        if( warning && ignore_warning( reinterpret_cast<char*>( error->sqlstate ), error->native_code TSRMLS_CC ) && 
-            ignored_chain != NULL ) {
-            
-            if( add_next_index_zval( *ignored_chain, *error_z ) == FAILURE ) {
-                DIE( "Fatal error during error processing" );
-            }          
-        }
-        else {
+	// ASSOCIATIVE ARRAY SQLSTATE
+	
+	if (add_next_index_zval(&error_z, &strSQLState) == FAILURE) 
+	{
+		DIE("Fatal error during error processing");
+	}
 
-            // It is either an error or a warning which should not be ignored. 
-            if( add_next_index_zval( *reported_chain, *error_z ) == FAILURE ) {
-                DIE( "Fatal error during error processing" );
-            }          
-        }
-    }
-    else
-    {
-        // It is a warning with warning_return_as_errors as false, so simply add it to the ignored_chain list
-        if( ignored_chain != NULL ) {
-         
-            if( add_next_index_zval( *ignored_chain, *error_z ) == FAILURE ) {
-                DIE( "Fatal error during error processing" );
-            }          
-        }
-    }
+	// That is one of the places that we can easily crash
+	// when associatively adding strings with the brand new Zend memory manager
+	if (add_assoc_zval(&error_z, "SQLSTATE", &strSQLState) == FAILURE) 
+	{
+		DIE("Fatal error during error processing");
+	}
+
+	// ASSOCIATIVE ARRAY , NATIVE CODE
+	if (add_next_index_long(&error_z, error->native_code) == FAILURE)
+	{
+		DIE("Fatal error during error processing");
+	}
+	
+	if (add_assoc_long(&error_z, "code", error->native_code) == FAILURE) 
+	{
+		DIE("Fatal error during error processing");
+	}
+
+	// ASSOCIATIVE ARRAY , NATIVE MESSAGE
+	if (add_next_index_zval(&error_z, &strNativeMessage) == FAILURE)
+	{
+		DIE("Fatal error during error processing");
+	}
+
+	
+	if (add_assoc_zval(&error_z, "message", &strNativeMessage) == FAILURE)
+	{
+		DIE("Fatal error during error processing");
+	}
+	
+	
+#else
+	// sqlstate
+	zval_auto_ptr temp;
+	MAKE_STD_ZVAL(temp);
+	ZVAL_STRINGL(temp, reinterpret_cast<char*>(error->sqlstate), SQL_SQLSTATE_SIZE, 1);
+	zval_add_ref(&temp);
+	
+	if (add_next_index_zval(*error_z, temp) == FAILURE) {
+		DIE("Fatal error during error processing");
+	}
+
+	if (add_assoc_zval(*error_z, "SQLSTATE", temp) == FAILURE) {
+		DIE("Fatal error during error processing");
+	}
+	temp.transferred();
+
+	// native_code
+	if (add_next_index_long(*error_z, error->native_code) == FAILURE) {
+		DIE("Fatal error during error processing");
+	}
+
+	if (add_assoc_long(*error_z, "code", error->native_code) == FAILURE) {
+		DIE("Fatal error during error processing");
+	}
+
+	// native_message
+	MAKE_STD_ZVAL(temp);
+	ZVAL_STRING(temp, reinterpret_cast<char*>(error->native_message), 1);
+	zval_add_ref(&temp);
+	if (add_next_index_zval(*error_z, temp) == FAILURE) {
+		DIE("Fatal error during error processing");
+	}
+
+	if (add_assoc_zval(*error_z, "message", temp) == FAILURE) {
+		DIE("Fatal error during error processing");
+	}
+	temp.transferred();
+#endif
+	
+	// If it is an error or if warning_return_as_errors is true than
+	// add the error or warning to the reported_chain.
+	if (!warning || SQLSRV_G(warnings_return_as_errors))
+	{
+		// if the warning is part of the ignored warning list than 
+		// add to the ignored chain if the ignored chain is not null.
+		if (warning && ignore_warning(reinterpret_cast<char*>(error->sqlstate), error->native_code TSRMLS_CC) &&
+			ignored_chain != NULL) {
+#if PHP_MAJOR_VERSION >= 7
+			if (add_next_index_zval(*ignored_chain,&error_z) == FAILURE)
+#else
+			if (add_next_index_zval(*ignored_chain, *error_z) == FAILURE) 
+#endif
+			{
+
+				DIE("Fatal error during error processing");
+		}
+	}
+		else {
+
+			// It is either an error or a warning which should not be ignored. 
+#if PHP_MAJOR_VERSION >= 7
+			if (add_next_index_zval(*reported_chain, &error_z) == FAILURE){
+#else
+			if (add_next_index_zval(*reported_chain, *error_z) == FAILURE) {
+#endif
+
+				DIE("Fatal error during error processing");
+			}
+		}
+	}
+	else
+	{
+		// It is a warning with warning_return_as_errors as false, so simply add it to the ignored_chain list
+		if (ignored_chain != NULL) {
+
+#if PHP_MAJOR_VERSION >= 7
+			if (add_next_index_zval(*ignored_chain, &error_z) == FAILURE)
+#else
+			if (add_next_index_zval(*ignored_chain, *error_z) == FAILURE)
+#endif
+			{
+				DIE("Fatal error during error processing");
+			}
+		}
+	}
+
+#if PHP_MAJOR_VERSION >= 7
+	return error_z;
+#endif
+	
 }
 
+// Entry point for errors and warnings
 bool handle_errors_and_warnings( sqlsrv_context& ctx, zval** reported_chain, zval** ignored_chain, logging_severity log_severity, 
                                  unsigned int sqlsrv_error_code, bool warning, va_list* print_args TSRMLS_DC )
 {
     bool result = true;
     bool errors_ignored = false;
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	unsigned int prev_reported_cnt = 0;
+#else
     int prev_reported_cnt = 0;
+#endif
     bool reported_chain_was_null = false;
     bool ignored_chain_was_null = false;
     int zr = SUCCESS;
-    zval* error_z = NULL;
+
+#if PHP_MAJOR_VERSION >= 7
+	zval error_z;
+#else
+	zval* error_z = NULL;
+#endif
     sqlsrv_error_auto_ptr error;
 
     // array of reported errors
@@ -815,7 +1012,12 @@ bool handle_errors_and_warnings( sqlsrv_context& ctx, zval** reported_chain, zva
         }
     }
     else {
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		prev_reported_cnt = zend_hash_num_elements(Z_ARRVAL_P(*reported_chain));
+#else
         prev_reported_cnt = zend_hash_num_elements( Z_ARRVAL_PP( reported_chain ));
+#endif
     }
 
     // array of ignored errors
@@ -834,15 +1036,24 @@ bool handle_errors_and_warnings( sqlsrv_context& ctx, zval** reported_chain, zva
     if( sqlsrv_error_code != SQLSRV_ERROR_ODBC ) {
         
         core_sqlsrv_format_driver_error( ctx, get_error_message( sqlsrv_error_code ), error, log_severity TSRMLS_CC, print_args );
-        copy_error_to_zval( &error_z, error, reported_chain, ignored_chain, warning TSRMLS_CC );
+#if PHP_MAJOR_VERSION >= 7
+		error_z = copy_error_to_zval(error, reported_chain, ignored_chain, warning TSRMLS_CC);
+#else
+		copy_error_to_zval(&error_z, error, reported_chain, ignored_chain, warning TSRMLS_CC);
+#endif
     }
   
     SQLSMALLINT record_number = 0;
     do {
 
         result = core_sqlsrv_get_odbc_error( ctx, ++record_number, error, log_severity TSRMLS_CC );
-        if( result ) {
-            copy_error_to_zval( &error_z, error, reported_chain, ignored_chain, warning TSRMLS_CC );
+        if( result ) 
+		{
+#if PHP_MAJOR_VERSION >= 7
+			error_z = copy_error_to_zval(error, reported_chain, ignored_chain, warning TSRMLS_CC);
+#else
+			copy_error_to_zval(&error_z, error, reported_chain, ignored_chain, warning TSRMLS_CC);
+#endif
         }
     } while( result );
     
@@ -852,28 +1063,58 @@ bool handle_errors_and_warnings( sqlsrv_context& ctx, zval** reported_chain, zva
 
         errors_ignored = true;
 
-        if( SQLSRV_G( warnings_return_as_errors ) ) {
-            
+        if( SQLSRV_G( warnings_return_as_errors ) ) 
+		{
+			//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+			if (zend_hash_num_elements(Z_ARRVAL_P(*reported_chain)) > prev_reported_cnt) 
+			{
+				// We actually added some errors
+				errors_ignored = false;
+			}
+#else
             if( zend_hash_num_elements( Z_ARRVAL_PP( reported_chain )) > prev_reported_cnt ) {
                 
                 // We actually added some errors
                 errors_ignored = false;
             }
+#endif
         }
     }
-
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	// if the error array came in as NULL and didn't have anything added to it, return it as NULL
+	if (reported_chain_was_null && zend_hash_num_elements(Z_ARRVAL_P(*reported_chain)) == 0)
+	{
+		zend_hash_destroy(Z_ARRVAL_P(*reported_chain));
+		FREE_HASHTABLE(Z_ARRVAL_P(*reported_chain));
+		ZVAL_NULL(*reported_chain);
+	}
+#else
     // if the error array came in as NULL and didn't have anything added to it, return it as NULL
-    if( reported_chain_was_null && zend_hash_num_elements( Z_ARRVAL_PP( reported_chain )) == 0 ) {
-        zend_hash_destroy( Z_ARRVAL_PP( reported_chain ));
-        FREE_HASHTABLE( Z_ARRVAL_PP( reported_chain ));
-        ZVAL_NULL( *reported_chain );
-    }
-    if( ignored_chain != NULL && ignored_chain_was_null && zend_hash_num_elements( Z_ARRVAL_PP( ignored_chain )) == 0 ) {
-        zend_hash_destroy( Z_ARRVAL_PP( ignored_chain ));
-        FREE_HASHTABLE( Z_ARRVAL_PP( ignored_chain ));
-        ZVAL_NULL( *ignored_chain );
-    }
-
+    if( reported_chain_was_null && zend_hash_num_elements( Z_ARRVAL_PP( reported_chain )) == 0 ) 
+	{
+		zend_hash_destroy(Z_ARRVAL_PP(reported_chain));
+		FREE_HASHTABLE(Z_ARRVAL_PP(reported_chain));
+		ZVAL_NULL(*reported_chain);
+	}
+#endif
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	if (ignored_chain != NULL && ignored_chain_was_null && zend_hash_num_elements(Z_ARRVAL_P(*ignored_chain)) == 0) 
+	{
+		zend_hash_destroy(Z_ARRVAL_P(*ignored_chain));
+		FREE_HASHTABLE(Z_ARRVAL_P(*ignored_chain));
+		ZVAL_NULL(*ignored_chain);
+	}
+#else
+	if (ignored_chain != NULL && ignored_chain_was_null && zend_hash_num_elements(Z_ARRVAL_PP(ignored_chain)) == 0) {
+		zend_hash_destroy(Z_ARRVAL_PP(ignored_chain));
+		FREE_HASHTABLE(Z_ARRVAL_PP(ignored_chain));
+		ZVAL_NULL(*ignored_chain);
+	}
+#endif
+     
     // If it was an error instead of a warning than we always return errors_ignored = false.
     return errors_ignored;
 }
@@ -884,15 +1125,26 @@ bool ignore_warning( char* sql_state, int native_code TSRMLS_DC )
 {
     for( zend_hash_internal_pointer_reset( g_ss_warnings_to_ignore_ht );
          zend_hash_has_more_elements( g_ss_warnings_to_ignore_ht ) == SUCCESS;
-         zend_hash_move_forward( g_ss_warnings_to_ignore_ht ) ) {
-
-        void* error_v = NULL;
-        
-        if( zend_hash_get_current_data( g_ss_warnings_to_ignore_ht, (void**) &error_v ) == FAILURE ) {
+         zend_hash_move_forward( g_ss_warnings_to_ignore_ht ) ) 
+	{
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		zval* error_v = NULL;
+		error_v = zend_hash_get_current_data(g_ss_warnings_to_ignore_ht);
+		if (error_v == NULL)
+		{
+			return false;
+		}
+		sqlsrv_error* error = (sqlsrv_error*)(error_v); // WILL FAIL !!!
+#else
+		void* error_v = NULL;
+        if( zend_hash_get_current_data( g_ss_warnings_to_ignore_ht, (void**) &error_v ) == FAILURE ) 
+		{
             return false;
-        }
+       }
+		sqlsrv_error* error = static_cast<sqlsrv_error*>(error_v);
+#endif
         
-        sqlsrv_error* error = static_cast<sqlsrv_error*>( error_v );
         if( !strncmp( reinterpret_cast<char*>( error->sqlstate ), sql_state, SQL_SQLSTATE_SIZE ) && 
             ( error->native_code == native_code || error->native_code == -1 )) {
                 return true;
@@ -902,12 +1154,27 @@ bool ignore_warning( char* sql_state, int native_code TSRMLS_DC )
     return false;
 }
 
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+int  sqlsrv_merge_zend_hash_dtor(zval* dest TSRMLS_DC)
+#else
 int  sqlsrv_merge_zend_hash_dtor( void* dest TSRMLS_DC )
+#endif
 {
+
+//PHP7 Port
+#if PHP_MAJOR_VERSION < 7
 #if defined(ZTS)
     SQLSRV_UNUSED( tsrm_ls );
 #endif
+#endif
+
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	zval_ptr_dtor(dest);
+#else
     zval_ptr_dtor( reinterpret_cast<zval**>( &dest ));
+#endif
 
     return ZEND_HASH_APPLY_REMOVE;
 }
@@ -916,12 +1183,15 @@ int  sqlsrv_merge_zend_hash_dtor( void* dest TSRMLS_DC )
 // merge a source hash into a dest hash table and return any errors.
 bool sqlsrv_merge_zend_hash( __inout zval* dest_z, zval const* src_z TSRMLS_DC )
 {
+//PHP7 Port
+#if PHP_MAJOR_VERSION < 7
 #if defined(ZTS)
     SQLSRV_UNUSED( tsrm_ls );
 #endif
+#endif
 
-    if( Z_TYPE_P( dest_z ) != IS_ARRAY && Z_TYPE_P( dest_z ) != IS_NULL ) DIE( "dest_z must be an array or null" );
-    if( Z_TYPE_P( src_z ) != IS_ARRAY && Z_TYPE_P( src_z ) != IS_NULL ) DIE( "src_z must be an array or null" );
+	if (Z_TYPE_P(dest_z) != IS_ARRAY && Z_TYPE_P(dest_z) != IS_NULL) DIE("dest_z must be an array or null");
+	if (Z_TYPE_P(src_z) != IS_ARRAY && Z_TYPE_P(src_z) != IS_NULL) DIE("src_z must be an array or null");
 
     if( Z_TYPE_P( src_z ) == IS_NULL ) {
         return true;
@@ -932,24 +1202,41 @@ bool sqlsrv_merge_zend_hash( __inout zval* dest_z, zval const* src_z TSRMLS_DC )
 
     for( zend_hash_internal_pointer_reset( src_ht );
          zend_hash_has_more_elements( src_ht ) == SUCCESS;
-         zend_hash_move_forward( src_ht ) ) {
-         
-        void* value_v;
-        zval* value_z;
-
-        result = zend_hash_get_current_data( src_ht, (void**) &value_v );
-        if( result == FAILURE ) {
-            zend_hash_apply( Z_ARRVAL_P( dest_z ), sqlsrv_merge_zend_hash_dtor TSRMLS_CC );
-            return false;
-        }
-        value_z = *(static_cast<zval**>( value_v ));
+         zend_hash_move_forward( src_ht ) ) 
+	{
+		zval* value_z = NULL;
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		
+		if ((value_z = zend_hash_get_current_data(src_ht)) == NULL)
+		{
+			zend_hash_apply(Z_ARRVAL_P(dest_z), sqlsrv_merge_zend_hash_dtor TSRMLS_CC);
+			return false;
+		}
+#else
+		void* value_v;
+		result = zend_hash_get_current_data(src_ht, (void**)&value_v);
+		if (result == FAILURE) {
+			zend_hash_apply(Z_ARRVAL_P(dest_z), sqlsrv_merge_zend_hash_dtor TSRMLS_CC);
+			return false;
+		} 
+		value_z = *(static_cast<zval**>(value_v));
+#endif
+       
         result = add_next_index_zval( dest_z, value_z );
 
-        if( result == FAILURE ) {
+        if( result == FAILURE ) 
+		{
             zend_hash_apply( Z_ARRVAL_P( dest_z ), sqlsrv_merge_zend_hash_dtor TSRMLS_CC );
             return false;
         }
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		zval_add_ref(value_z);
+#else
         zval_add_ref( &value_z );
+#endif
+
     }
 
     return true;

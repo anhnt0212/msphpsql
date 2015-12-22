@@ -1,7 +1,7 @@
 //---------------------------------------------------------------------------------------------------------------------------------
-// File: conn.cpp
+// File: core_stream.cpp
 //
-// Contents: Routines that use connection handles
+// Contents: Implementation of PHP streams for reading SQL Server data
 //
 // Microsoft Drivers 3.2 for PHP for SQL Server
 // Copyright(c) Microsoft Corporation
@@ -17,6 +17,9 @@
 //  IN THE SOFTWARE.
 //---------------------------------------------------------------------------------------------------------------------------------
 
+
+
+#include "zend_utility.h"
 #include "php_sqlsrv.h"
 #include <psapi.h>
 #include <windows.h>
@@ -24,6 +27,8 @@
 
 #include <string>
 #include <sstream>
+
+
 
 // *** internal variables and constants ***
 
@@ -62,9 +67,9 @@ struct conn_char_set_func {
              zend_hash_move_forward( g_ss_encodings_ht )) {
 
             sqlsrv_encoding* ss_encoding;
-            core::sqlsrv_zend_hash_get_current_data( *conn, g_ss_encodings_ht, (void**) &ss_encoding TSRMLS_CC );
+			core::sqlsrv_zend_hash_get_current_data(*conn, g_ss_encodings_ht, (void**)&ss_encoding TSRMLS_CC);
 
-            if( !strnicmp( encoding, ss_encoding->iana, encoding_len ) ) {
+            if( !_strnicmp( encoding, ss_encoding->iana, encoding_len ) ) {
 
                 if( ss_encoding->not_for_connection ) {
                     THROW_SS_ERROR( conn, SS_SQLSRV_ERROR_CONNECT_ILLEGAL_ENCODING, encoding );
@@ -404,7 +409,7 @@ const connection_option SS_CONN_OPTS[] = {
 // or port number (for example, "myServer, 1521") can be included as part of
 // this string. For a complete description of the options available for this
 // parameter, see the Server keyword in the ODBC Driver Connection String
-// Keywords section of Using Connection String Keywords with ODBC Driver 11 for SQL Server.
+// Keywords section of Using Connection String Keywords with ODBC Driver 11 for Sql Server.
 //
 // $connectionInfo [OPTIONAL]: An associative array that contains connection
 // attributes (for example, array("Database" => "AdventureWorks")).
@@ -415,9 +420,12 @@ const connection_option SS_CONN_OPTS[] = {
 
 PHP_FUNCTION ( sqlsrv_connect ) 
 {
+	//PHP7 Port
+#if PHP_MAJOR_VERSION < 7
     SQLSRV_UNUSED( return_value_used );
     SQLSRV_UNUSED( this_ptr );
     SQLSRV_UNUSED( return_value_ptr );
+#endif
     
     LOG_FUNCTION( "sqlsrv_connect" );
     SET_FUNCTION_NAME( *g_henv_cp );
@@ -466,7 +474,12 @@ PHP_FUNCTION ( sqlsrv_connect )
         core::sqlsrv_zend_hash_init( *g_henv_cp, stmts, 5, NULL /* hashfn */, NULL /* dtor */, 0 /* persistent */ TSRMLS_CC );
 
         // register the connection with the PHP runtime        
-        ss::zend_register_resource( return_value, conn, ss_sqlsrv_conn::descriptor, ss_sqlsrv_conn::resource_name TSRMLS_CC );
+#if PHP_MAJOR_VERSION >= 7
+		zend_resource* res = ss::zend_register_resource(conn, ss_sqlsrv_conn::descriptor, ss_sqlsrv_conn::resource_name );
+		RETVAL_RES(res);
+#else
+		ss::zend_register_resource(return_value, conn, ss_sqlsrv_conn::descriptor, ss_sqlsrv_conn::resource_name TSRMLS_CC);
+#endif
 
         conn->stmts = stmts;
         stmts.transferred();
@@ -513,11 +526,14 @@ PHP_FUNCTION ( sqlsrv_connect )
 
 PHP_FUNCTION( sqlsrv_begin_transaction ) 
 {   
+	non_supported_function("sqlsrv_begin_transaction");
     LOG_FUNCTION( "sqlsrv_begin_transaction" );
-
-    SQLSRV_UNUSED( return_value_used );
-    SQLSRV_UNUSED( this_ptr );
-    SQLSRV_UNUSED( return_value_ptr );
+	//PHP7 Port
+#if PHP_MAJOR_VERSION < 7
+	SQLSRV_UNUSED(return_value_used);
+	SQLSRV_UNUSED(this_ptr);
+	SQLSRV_UNUSED(return_value_ptr);
+#endif
     
     ss_sqlsrv_conn* conn = NULL;
     PROCESS_PARAMS( conn, "r", _FN_, 0 );
@@ -562,17 +578,23 @@ PHP_FUNCTION( sqlsrv_begin_transaction )
 
 PHP_FUNCTION( sqlsrv_close )
 {
+	//PHP7 Port
+#if PHP_MAJOR_VERSION < 7
     SQLSRV_UNUSED( return_value_used );
     SQLSRV_UNUSED( this_ptr );
     SQLSRV_UNUSED( return_value_ptr );
-
+#endif
     LOG_FUNCTION( "sqlsrv_close" );
     
     zval* conn_r = NULL;
     ss_sqlsrv_conn* conn = NULL;
     sqlsrv_context_auto_ptr error_ctx;
 
+	//PHP7 Port
+#if PHP_MAJOR_VERSION < 7 
     full_mem_check(MEMCHECK_SILENT);
+#endif
+
     reset_errors( TSRMLS_C );
     
     try {
@@ -581,44 +603,58 @@ PHP_FUNCTION( sqlsrv_close )
         error_ctx = new (sqlsrv_malloc( sizeof( sqlsrv_context ))) sqlsrv_context( 0, ss_error_handler, NULL );
         SET_FUNCTION_NAME( *error_ctx );
 
-        if( zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "r", &conn_r ) == FAILURE ) {
+		if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "r", &conn_r) == FAILURE)
+		{
+			// Check if it was a zval
+			int zr = zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "z", &conn_r);
+			CHECK_CUSTOM_ERROR((zr == FAILURE), error_ctx, SS_SQLSRV_ERROR_INVALID_FUNCTION_PARAMETER, _FN_) {
+
+				throw ss::SSException();
+			}
+
+			// if sqlsrv_close was called on a non-existent connection than we just return success.
+			if (Z_TYPE_P(conn_r) == IS_NULL) {
+
+				RETURN_TRUE;
+			}
+			else {
+
+				THROW_CORE_ERROR(error_ctx, SS_SQLSRV_ERROR_INVALID_FUNCTION_PARAMETER, _FN_);
+			}
+		}
+
+#if PHP_MAJOR_VERSION >= 7
+		PROCESS_PARAMS(conn, "r", _FN_, 0);
+#else
+		conn = static_cast<ss_sqlsrv_conn*>(zend_fetch_resource(&conn_r TSRMLS_CC, -1, ss_sqlsrv_conn::resource_name, NULL, 1,
+			ss_sqlsrv_conn::descriptor));
+#endif
         
-             // Check if it was a zval
-            int zr = zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "z", &conn_r );
-            CHECK_CUSTOM_ERROR(( zr == FAILURE ), error_ctx, SS_SQLSRV_ERROR_INVALID_FUNCTION_PARAMETER, _FN_ ) {
-
-                throw ss::SSException();
-            }   
-
-            // if sqlsrv_close was called on a non-existent connection than we just return success.
-            if( Z_TYPE_P( conn_r ) == IS_NULL ) {
-
-                RETURN_TRUE;
-            }
-            else {
-                
-              THROW_CORE_ERROR( error_ctx, SS_SQLSRV_ERROR_INVALID_FUNCTION_PARAMETER, _FN_ );
-            }
-        }
-
-        conn = static_cast<ss_sqlsrv_conn*>( zend_fetch_resource( &conn_r TSRMLS_CC, -1, ss_sqlsrv_conn::resource_name, NULL, 1, 
-                                                                  ss_sqlsrv_conn::descriptor ));
-        
-        CHECK_CUSTOM_ERROR(( conn == NULL ), error_ctx, SS_SQLSRV_ERROR_INVALID_FUNCTION_PARAMETER, _FN_ ) {
-
-            throw ss::SSException();
-        }   
+       CHECK_CUSTOM_ERROR(( conn == NULL ), error_ctx, SS_SQLSRV_ERROR_INVALID_FUNCTION_PARAMETER, _FN_ ) 
+	   {
+         throw ss::SSException();
+       }   
 
         SET_FUNCTION_NAME( *conn );
 
         // cause any variables still holding a reference to this to be invalid so they cause
         // an error when passed to a sqlsrv function.  There's nothing we can do if the 
         // removal fails, so we just log it and move on.
-        int zr = zend_hash_index_del( &EG( regular_list ), Z_RESVAL_P( conn_r ));
+
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		int zr = zend_hash_index_del(&EG(regular_list), Z_RES_P(conn_r)->handle);
+#else
+		int zr = zend_hash_index_del(&EG(regular_list), Z_RESVAL_P(conn_r));
+#endif
         
         if( zr == FAILURE ) {
-
-            LOG( SEV_ERROR, "Failed to remove connection resource %1!d!", Z_RESVAL_P( conn_r ));
+			//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+			LOG(SEV_ERROR, "Failed to remove connection resource %1!d!", Z_RES_P(conn_r)->handle);
+#else
+			LOG(SEV_ERROR, "Failed to remove connection resource %1!d!", Z_RESVAL_P(conn_r));
+#endif
         }
 
         ZVAL_NULL( conn_r );
@@ -635,7 +671,12 @@ PHP_FUNCTION( sqlsrv_close )
     }
 }
 
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+void __cdecl sqlsrv_conn_dtor(zend_resource *rsrc TSRMLS_DC)
+#else
 void __cdecl sqlsrv_conn_dtor( zend_rsrc_list_entry *rsrc TSRMLS_DC )
+#endif
 {
     LOG_FUNCTION( "sqlsrv_conn_dtor" );
 
@@ -678,11 +719,14 @@ void __cdecl sqlsrv_conn_dtor( zend_rsrc_list_entry *rsrc TSRMLS_DC )
 
 PHP_FUNCTION( sqlsrv_commit )
 {
+	non_supported_function("sqlsrv_commit");
     LOG_FUNCTION( "sqlsrv_commit" );
 
-    SQLSRV_UNUSED( return_value_used );
-    SQLSRV_UNUSED( this_ptr );
-    SQLSRV_UNUSED( return_value_ptr );
+#if PHP_MAJOR_VERSION < 7
+	SQLSRV_UNUSED(return_value_used);
+	SQLSRV_UNUSED(this_ptr);
+	SQLSRV_UNUSED(return_value_ptr);
+#endif
 
     ss_sqlsrv_conn* conn = NULL;
 
@@ -735,11 +779,14 @@ PHP_FUNCTION( sqlsrv_commit )
 
 PHP_FUNCTION( sqlsrv_rollback )
 {
+	non_supported_function("sqlsrv_begin_transaction");
     LOG_FUNCTION( "sqlsrv_rollback" );
-
-    SQLSRV_UNUSED( return_value_used );
-    SQLSRV_UNUSED( this_ptr );
-    SQLSRV_UNUSED( return_value_ptr );
+	//PHP7 Port
+#if PHP_MAJOR_VERSION < 7
+	SQLSRV_UNUSED(return_value_used);
+	SQLSRV_UNUSED(this_ptr);
+	SQLSRV_UNUSED(return_value_ptr);
+#endif
 
     ss_sqlsrv_conn* conn = NULL;
 
@@ -773,9 +820,13 @@ PHP_FUNCTION( sqlsrv_rollback )
 
 PHP_FUNCTION( sqlsrv_client_info )
 {
-    SQLSRV_UNUSED( return_value_used );
-    SQLSRV_UNUSED( this_ptr );
-    SQLSRV_UNUSED( return_value_ptr );
+	non_supported_function("sqlsrv_client_info");
+	//PHP7 Port
+#if PHP_MAJOR_VERSION < 7
+	SQLSRV_UNUSED(return_value_used);
+	SQLSRV_UNUSED(this_ptr);
+	SQLSRV_UNUSED(return_value_ptr);
+#endif
 
     LOG_FUNCTION( "sqlsrv_client_info" );
     ss_sqlsrv_conn* conn = NULL;
@@ -816,11 +867,15 @@ PHP_FUNCTION( sqlsrv_client_info )
 
 PHP_FUNCTION( sqlsrv_server_info )
 {
+	non_supported_function("sqlsrv_server_info");
     try {
 
-        SQLSRV_UNUSED( return_value_used );
-        SQLSRV_UNUSED( this_ptr );
-        SQLSRV_UNUSED( return_value_ptr );
+		//PHP7 Port
+#if PHP_MAJOR_VERSION < 7
+		SQLSRV_UNUSED(return_value_used);
+		SQLSRV_UNUSED(this_ptr);
+		SQLSRV_UNUSED(return_value_ptr);
+#endif
 
         LOG_FUNCTION( "sqlsrv_server_info" );
         ss_sqlsrv_conn* conn = NULL;
@@ -873,9 +928,12 @@ PHP_FUNCTION( sqlsrv_server_info )
 
 PHP_FUNCTION( sqlsrv_prepare )
 {
-    SQLSRV_UNUSED( return_value_used );
-    SQLSRV_UNUSED( this_ptr );
-    SQLSRV_UNUSED( return_value_ptr );
+	//PHP7 Port
+#if PHP_MAJOR_VERSION < 7
+	SQLSRV_UNUSED(return_value_used);
+	SQLSRV_UNUSED(this_ptr);
+	SQLSRV_UNUSED(return_value_ptr);
+#endif
 
     LOG_FUNCTION( "sqlsrv_prepare" );
 
@@ -886,22 +944,22 @@ PHP_FUNCTION( sqlsrv_prepare )
     zval* params_z = NULL;
     zval* options_z = NULL;
     hash_auto_ptr ss_stmt_options_ht;
-    zval_auto_ptr stmt_z;
-    ALLOC_INIT_ZVAL( stmt_z );
+#if PHP_MAJOR_VERSION < 7 
+	zval_auto_ptr stmt_z;
+	ALLOC_INIT_ZVAL(stmt_z);
+#endif
 
     PROCESS_PARAMS( conn, "rs|a!a!", _FN_, 4, &sql, &sql_len, &params_z, &options_z );
-
     try {
-
         if( options_z && zend_hash_num_elements( Z_ARRVAL_P( options_z )) > 0 ) {
 
             // Initialize the options array to be passed to the core layer
             ALLOC_HASHTABLE( ss_stmt_options_ht );
+
             core::sqlsrv_zend_hash_init( *conn , ss_stmt_options_ht, 3 /* # of buckets */, NULL /*hashfn*/, 
                                          ZVAL_PTR_DTOR, 0 /*persistent*/ TSRMLS_CC );
-            
+
             validate_stmt_options( *conn, options_z, ss_stmt_options_ht TSRMLS_CC );
-        
         }
 
         if( params_z && Z_TYPE_P( params_z ) != IS_ARRAY ) {
@@ -926,37 +984,58 @@ PHP_FUNCTION( sqlsrv_prepare )
         mark_params_by_reference( stmt, params_z TSRMLS_CC );
 
         stmt->prepared = true;
+     
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		// store the resource id with the connection so the connection 
+		// can release this statement when it closes.
+		int next_index = zend_hash_next_free_element(conn->stmts);
+		stmt->conn_index = next_index;
 
-        // register the statement with the PHP runtime        
-        ss::zend_register_resource( stmt_z, stmt, ss_sqlsrv_stmt::descriptor, ss_sqlsrv_stmt::resource_name TSRMLS_CC );
+		// register the statement with the PHP runtime        
+		zend_resource* res = ss::zend_register_resource(stmt, ss_sqlsrv_stmt::descriptor, ss_sqlsrv_stmt::resource_name);
 
-        // store the resource id with the connection so the connection 
-        // can release this statement when it closes.
-        int next_index = zend_hash_next_free_element( conn->stmts );
+		//long rsrc_idx = Z_RES_P(return_value)->handle;
+		long rsrc_idx = res->handle;
+		core::sqlsrv_zend_hash_index_update(*conn, conn->stmts, next_index, (zval *)&rsrc_idx, sizeof(long) TSRMLS_CC);
+
+		RETVAL_RES(res);
+
+		// the statement is now registered with EG( regular_list )
+		stmt.transferred();
+#else
+		// register the statement with the PHP runtime        
+		ss::zend_register_resource(stmt_z, stmt, ss_sqlsrv_stmt::descriptor, ss_sqlsrv_stmt::resource_name TSRMLS_CC);
+
+		// store the resource id with the connection so the connection 
+		// can release this statement when it closes.
+		int next_index = zend_hash_next_free_element(conn->stmts);
         long rsrc_idx = Z_RESVAL_P( stmt_z );
+		core::sqlsrv_zend_hash_index_update(*conn, conn->stmts, next_index, &rsrc_idx, sizeof(long) TSRMLS_CC);
 
-        core::sqlsrv_zend_hash_index_update(*conn, conn->stmts, next_index, &rsrc_idx, sizeof( long ) TSRMLS_CC );
+		stmt->conn_index = next_index;
 
-        stmt->conn_index = next_index;
+		// the statement is now registered with EG( regular_list )
+		stmt.transferred();
 
-        // the statement is now registered with EG( regular_list )
-        stmt.transferred();
-
-        zval_ptr_dtor( &return_value );
-        *return_value_ptr = stmt_z;
-        stmt_z.transferred();
-
+		zval_ptr_dtor(&return_value);
+		*return_value_ptr = stmt_z.transferred();
+#endif
     }
     catch( core::CoreException& ) {
 
         if( stmt ) {
             
             stmt->conn = NULL;
-            stmt->~ss_sqlsrv_stmt();
+            // stmt->~ss_sqlsrv_stmt(); // what's the point of encapsulation when you have to do this??
         }
+#if PHP_MAJOR_VERSION >= 7
+
+#else
         if( Z_TYPE_P( stmt_z ) != IS_NULL ) {
             free_stmt_resource( stmt_z TSRMLS_CC );
         }
+#endif
 
         RETURN_FALSE;
     }
@@ -998,9 +1077,12 @@ PHP_FUNCTION( sqlsrv_prepare )
 
 PHP_FUNCTION( sqlsrv_query )
 {
-    SQLSRV_UNUSED( return_value_used );
-    SQLSRV_UNUSED( this_ptr );
-    SQLSRV_UNUSED( return_value_ptr );
+	//PHP7 Port
+#if PHP_MAJOR_VERSION < 7
+	SQLSRV_UNUSED(return_value_used);
+	SQLSRV_UNUSED(this_ptr);
+	SQLSRV_UNUSED(return_value_ptr);
+#endif
 
     LOG_FUNCTION( "sqlsrv_query" );
 
@@ -1047,7 +1129,12 @@ PHP_FUNCTION( sqlsrv_query )
 
         stmt->params_z = params_z;
         if( params_z ) {
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+			zval_add_ref(params_z);
+#else
             zval_add_ref( &params_z );
+#endif
         }
 
         stmt->set_func( "sqlsrv_query" );
@@ -1057,21 +1144,43 @@ PHP_FUNCTION( sqlsrv_query )
         // execute the statement
         core_sqlsrv_execute( stmt TSRMLS_CC, sql, sql_len );
 
-        // register the statement with the PHP runtime        
-        ALLOC_INIT_ZVAL( stmt_z );
+        // register the statement with the PHP runtime 
+		ALLOC_INIT_ZVAL(stmt_z);
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		zend_resource* res = ss::zend_register_resource(stmt, ss_sqlsrv_stmt::descriptor, ss_sqlsrv_stmt::resource_name TSRMLS_CC);
+		RETVAL_RES(res);
+#else
         ss::zend_register_resource( stmt_z, stmt, ss_sqlsrv_stmt::descriptor, ss_sqlsrv_stmt::resource_name TSRMLS_CC );
+#endif
 
         // store the resource id with the connection so the connection 
         // can release this statement when it closes.
         int next_index = zend_hash_next_free_element( conn->stmts );
-        long rsrc_idx = Z_RESVAL_P( stmt_z );
-        core::sqlsrv_zend_hash_index_update(*conn, conn->stmts, next_index, &rsrc_idx, sizeof( long ) TSRMLS_CC );
+
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		long rsrc_idx = Z_RES_P(stmt_z)->handle;
+		core::sqlsrv_zend_hash_index_update(*conn, conn->stmts, next_index, (zval *)&rsrc_idx, sizeof(long) TSRMLS_CC);
+#else
+		long rsrc_idx = Z_RESVAL_P(stmt_z);
+		core::sqlsrv_zend_hash_index_update(*conn, conn->stmts, next_index, &rsrc_idx, sizeof(long) TSRMLS_CC);
+#endif
+        
         stmt->conn_index = next_index;
         stmt.transferred();
 
-        zval_ptr_dtor( &return_value );
-        *return_value_ptr = stmt_z;
-        stmt_z.transferred();
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		zval_ptr_dtor(return_value);
+		EG(current_execute_data)->return_value = stmt_z;
+		stmt_z.transferred();
+#else
+		zval_ptr_dtor(&return_value);
+		*return_value_ptr = stmt_z;
+		stmt_z.transferred();
+#endif
+        
     }
 
     catch( core::CoreException& ) {
@@ -1079,7 +1188,7 @@ PHP_FUNCTION( sqlsrv_query )
         if( stmt ) {
 
             stmt->conn = NULL;  // tell the statement that it isn't part of the connection so it doesn't try to remove itself
-            stmt->~ss_sqlsrv_stmt();
+            // stmt->~ss_sqlsrv_stmt();
         }
         if( stmt_z ) {
 
@@ -1096,13 +1205,28 @@ PHP_FUNCTION( sqlsrv_query )
 
 void free_stmt_resource( zval* stmt_z TSRMLS_DC )
 {
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	int zr = zend_hash_index_del(&EG(regular_list), Z_RES_P(stmt_z)->handle);
+#else
     int zr = zend_hash_index_del( &EG( regular_list ), Z_RESVAL_P( stmt_z ));
+#endif
     if( zr == FAILURE ) {
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		LOG(SEV_ERROR, "Failed to remove stmt resource %1!d!", Z_RES_P(stmt_z)->handle);
+#else
         LOG( SEV_ERROR, "Failed to remove stmt resource %1!d!", Z_RESVAL_P( stmt_z ));
+#endif
     }
 
     ZVAL_NULL( stmt_z );
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	zval_ptr_dtor(stmt_z);
+#else
     zval_ptr_dtor( &stmt_z );
+#endif
 }
 
 // internal connection functions
@@ -1117,33 +1241,44 @@ void sqlsrv_conn_close_stmts( ss_sqlsrv_conn* conn TSRMLS_DC )
     //pre-condition check
     SQLSRV_ASSERT(( conn->handle() != NULL ), "sqlsrv_conn_close_stmts: Connection handle is NULL. Trying to destroy an "
                   "already destroyed connection.");
+
     SQLSRV_ASSERT(( conn->stmts ), "sqlsrv_conn_close_stmts: Connection doesn't contain a statement array." );
     
     // loop through the stmts hash table and destroy each stmt resource so we can close the 
     // ODBC connection
-    for( zend_hash_internal_pointer_reset( conn->stmts );
-         zend_hash_has_more_elements( conn->stmts ) == SUCCESS;
-         zend_hash_move_forward( conn->stmts )) {
+	for (zend_hash_internal_pointer_reset(conn->stmts);
+	zend_hash_has_more_elements(conn->stmts) == SUCCESS;
+		zend_hash_move_forward(conn->stmts))
+	{
 
-        long* rsrc_idx_ptr = NULL;
-        
-        try {
-            // get the resource id for the next statement created with this connection
-            core::sqlsrv_zend_hash_get_current_data( *conn, conn->stmts, reinterpret_cast<void**>( &rsrc_idx_ptr ) TSRMLS_CC );    
-        }
-        catch( core::CoreException& ) {
+		long* rsrc_idx_ptr = NULL;
 
-            DIE( "sqlsrv_conn_close_stmts: Failed to retrieve a statement resource from the connection" );
-        }
+		try {
+			// get the resource id for the next statement created with this connection
+			core::sqlsrv_zend_hash_get_current_data(*conn, conn->stmts, reinterpret_cast<void**>(&rsrc_idx_ptr) TSRMLS_CC);
+		}
+		catch (core::CoreException&)
+		{
+			DIE("sqlsrv_conn_close_stmts: Failed to retrieve a statement resource from the connection");
+		}
 
-        // see if the statement is still valid, and if not skip to the next one
-        // presumably this should never happen because if it's in the list, it should still be valid
-        // by virtue that a statement resource should remove itself from its connection when it is
-        // destroyed in sqlsrv_stmt_dtor.  However, rather than die (assert), we simply skip this resource
-        // and move to the next one.
-        ss_sqlsrv_stmt* stmt = NULL;
-        int type = -1;
-        stmt = static_cast<ss_sqlsrv_stmt*>( zend_list_find( *rsrc_idx_ptr, &type ));
+		// see if the statement is still valid, and if not skip to the next one
+		// presumably this should never happen because if it's in the list, it should still be valid
+		// by virtue that a statement resource should remove itself from its connection when it is
+		// destroyed in sqlsrv_stmt_dtor.  However, rather than die (assert), we simply skip this resource
+		// and move to the next one.
+		ss_sqlsrv_stmt* stmt = NULL;
+		int type = -1;
+#if PHP_MAJOR_VERSION >= 7
+		zval* zv = zend_list_find(*rsrc_idx_ptr);
+		if (zv)
+		{
+			stmt = (ss_sqlsrv_stmt *)(zv);
+			type = Z_RES_P(zv)->type;
+		}
+#else
+		stmt = static_cast<ss_sqlsrv_stmt*>( zend_list_find( *rsrc_idx_ptr, &type ));
+#endif
         if( stmt == NULL || type != ss_sqlsrv_stmt::descriptor ) {
             LOG( SEV_ERROR, "Non existent statement found in connection.  Statements should remove themselves"
                                       " from the connection so this shouldn't be out of sync." );
@@ -1172,13 +1307,13 @@ int get_conn_option_key( sqlsrv_context& ctx, char* key, unsigned int key_len, z
 {
     for( int i=0; SS_CONN_OPTS[ i ].conn_option_key != SQLSRV_CONN_OPTION_INVALID; ++i )
     {
-        if( key_len == SS_CONN_OPTS[ i ].sqlsrv_len && !stricmp( key, SS_CONN_OPTS[ i ].sqlsrv_name )) {
+        if( key_len == SS_CONN_OPTS[ i ].sqlsrv_len && !_stricmp( key, SS_CONN_OPTS[ i ].sqlsrv_name )) {
             
 
              switch( SS_CONN_OPTS[ i ].value_type ) {
 
                 case CONN_ATTR_BOOL:                        
-                    // bool attributes can be either strings to be appended to the connection string
+                    // bool attributes can be either strings to be append^ed to the connection string
                     // as yes or no or integral connection attributes.  This will have to be reworked
                     // if we ever introduce a boolean connection option that maps to a string connection
                     // attribute.
@@ -1222,7 +1357,7 @@ int get_stmt_option_key( char* key, unsigned int key_len TSRMLS_DC )
 {
     for( int i = 0; SS_STMT_OPTS[ i ].key != SQLSRV_STMT_OPTION_INVALID; ++i )
     {
-        if( key_len == SS_STMT_OPTS[ i ].name_len && !stricmp( key, SS_STMT_OPTS[ i ].name )) {
+        if( key_len == SS_STMT_OPTS[ i ].name_len && !_stricmp( key, SS_STMT_OPTS[ i ].name )) {
             
             return SS_STMT_OPTS[ i ].key;
         }
@@ -1235,26 +1370,41 @@ void add_stmt_option_key( sqlsrv_context& ctx, char* key, unsigned int key_len,
 {
     int option_key = ::get_stmt_option_key( key, key_len TSRMLS_CC );   
     
-    CHECK_CUSTOM_ERROR((option_key == SQLSRV_STMT_OPTION_INVALID ), ctx, SQLSRV_ERROR_INVALID_OPTION_KEY, key ) {
+	CHECK_CUSTOM_ERROR((option_key == SQLSRV_STMT_OPTION_INVALID), ctx, SQLSRV_ERROR_INVALID_OPTION_KEY, key)
+	{
+		throw ss::SSException();
+	}
 
-        throw ss::SSException();
-    }        
-
-    zval_add_ref( data );      // inc the ref count since this is going into the options_ht too.
-    core::sqlsrv_zend_hash_index_update( ctx, options_ht, option_key, (void**)data, sizeof(zval*) TSRMLS_CC );
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	zval_add_ref(*data);      // inc the ref count since this is going into the options_ht too.
+	core::sqlsrv_zend_hash_index_update(ctx, options_ht, option_key, *data, sizeof(zval) TSRMLS_CC);
+#else
+	zval_add_ref(data);      // inc the ref count since this is going into the options_ht too.
+	core::sqlsrv_zend_hash_index_update(ctx, options_ht, option_key, (void**)data, sizeof(zval*) TSRMLS_CC);
+#endif
 }
 
 void add_conn_option_key( sqlsrv_context& ctx, char* key, unsigned int key_len, 
                          HashTable* options_ht, zval** data TSRMLS_DC )
 {
+	
     int option_key = ::get_conn_option_key( ctx, key, key_len, *data TSRMLS_CC );    
-    CHECK_CUSTOM_ERROR((option_key == SQLSRV_STMT_OPTION_INVALID ), ctx, SS_SQLSRV_ERROR_INVALID_OPTION, key ) {
-
+	
+    CHECK_CUSTOM_ERROR((option_key == SQLSRV_STMT_OPTION_INVALID ), ctx, SS_SQLSRV_ERROR_INVALID_OPTION, key ) 
+	{
         throw ss::SSException();
-    }        
+    } 
 
+//PHP7 Port
+#if PHP_MAJOR_VERSION >=7
+	zval_add_ref(*data);      // inc the ref count since this is going into the options_ht too.
+	core::sqlsrv_zend_hash_index_update(ctx, options_ht, option_key, *data, sizeof(zval) TSRMLS_CC);
+#else
     zval_add_ref( data );      // inc the ref count since this is going into the options_ht too.
-    core::sqlsrv_zend_hash_index_update( ctx, options_ht, option_key, (void**)data, sizeof(zval*) TSRMLS_CC );
+	core::sqlsrv_zend_hash_index_update(ctx, options_ht, option_key, (void**)data, sizeof(zval*) TSRMLS_CC);
+#endif
+    
 }
 
 // Iterates through the list of statement options provided by the user and validates them 
@@ -1268,19 +1418,40 @@ void validate_stmt_options( sqlsrv_context& ctx, zval* stmt_options, __inout Has
         if( stmt_options ) {
            
             HashTable* options_ht = Z_ARRVAL_P( stmt_options );
+#if PHP_MAJOR_VERSION >= 7
+			HashPosition pos;
     
-            for( zend_hash_internal_pointer_reset( options_ht ); zend_hash_has_more_elements( options_ht ) == SUCCESS;
+            for( zend_hash_internal_pointer_reset_ex( options_ht, &pos ); zend_hash_has_more_elements( options_ht ) == SUCCESS;
                  zend_hash_move_forward( options_ht )) {
+#else
+			for (zend_hash_internal_pointer_reset(options_ht); zend_hash_has_more_elements(options_ht) == SUCCESS;
+			zend_hash_move_forward(options_ht)) {
+#endif
 
-                int type = HASH_KEY_NON_EXISTANT;
-                char *key = NULL;
+				//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+				int type = HASH_KEY_NON_EXISTENT;
+				zend_string* key = NULL;
+				zend_ulong int_key = -1;
+				zval* data = NULL;
+#else
+				int type = HASH_KEY_NON_EXISTANT;
+				char *key = NULL;
+				unsigned long int_key = -1;
+				zval** data;
+#endif
                 unsigned int key_len = 0;
-                unsigned long int_key = -1;
-                zval** data;
+                
                 zval* conn_opt = NULL;
                 int result = 0;
 
-                type = zend_hash_get_current_key_ex( options_ht, &key, &key_len, &int_key, 0, NULL );
+				//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+				type = zend_hash_get_current_key_ex(options_ht, &key, &int_key, &pos);
+#else
+		        type = zend_hash_get_current_key_ex( options_ht, &key, &key_len, &int_key, 0, NULL );
+#endif
+      
                 
                 if( type != HASH_KEY_IS_STRING ) {
                     std::ostringstream itoa;
@@ -1289,8 +1460,13 @@ void validate_stmt_options( sqlsrv_context& ctx, zval* stmt_options, __inout Has
                         throw core::CoreException();    
                     }
                 }
-                core::sqlsrv_zend_hash_get_current_data( ctx, options_ht, (void**) &data TSRMLS_CC );                    
+                
+				core::sqlsrv_zend_hash_get_current_data(ctx, options_ht, (void**)&data TSRMLS_CC);
+#if PHP_MAJOR_VERSION >= 7
+				add_stmt_option_key(ctx, key->val, static_cast<unsigned int>(get_zend_string_len(key)), ss_stmt_options_ht, &data TSRMLS_CC);
+#else
                 add_stmt_option_key( ctx, key, key_len, ss_stmt_options_ht, data TSRMLS_CC );
+#endif
             } 
         }
     }
@@ -1303,49 +1479,92 @@ void validate_stmt_options( sqlsrv_context& ctx, zval* stmt_options, __inout Has
 // Iterates through the list of connection options provided by the user and validates them 
 // against the predefined list of supported connection options by this driver. After validation
 // creates a Hashtable of connection options to be sent to the core layer for processing.
-
 void validate_conn_options( sqlsrv_context& ctx, zval* user_options_z, __out char** uid, __out char** pwd, __inout HashTable* ss_conn_options_ht TSRMLS_DC )
 {
     try {
 
-        if( user_options_z ) {
-
+        if( user_options_z ) 
+		{
             HashTable* options_ht = Z_ARRVAL_P( user_options_z );
-    
-            for( zend_hash_internal_pointer_reset( options_ht ); zend_hash_has_more_elements( options_ht ) == SUCCESS;
-                 zend_hash_move_forward( options_ht )) {
+#if PHP_MAJOR_VERSION >= 7
+			int type = HASH_KEY_NON_EXISTENT;
+			zend_string *key = NULL;
+			zend_ulong int_key = -1;
+			zval* data = NULL;
+            
+			ZEND_HASH_FOREACH_KEY_VAL(options_ht, int_key, key, data)
+#else
+			for ( zend_hash_internal_pointer_reset(options_ht); zend_hash_has_more_elements(options_ht) == SUCCESS; zend_hash_move_forward(options_ht))
+#endif
+			{
+				//PHP7 Port
+#if PHP_MAJOR_VERSION < 7
+				int type = HASH_KEY_NON_EXISTANT;
+				char *key = NULL;
+				unsigned long int_key = -1;
+				zval** data = NULL;
+#endif
+				unsigned int key_len = 0;
+				//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7 
+				
+				CHECK_CUSTOM_ERROR((!key), ctx, SS_SQLSRV_ERROR_INVALID_CONNECTION_KEY)
+				{
+					throw ss::SSException();
+				}
 
-                int type = HASH_KEY_NON_EXISTANT;
-                char *key = NULL;
-                unsigned int key_len = 0;
-                unsigned long int_key = -1;
-                zval** data = NULL;
+				key_len = static_cast<unsigned int>(get_zend_string_len(key));
+#else
+				type = zend_hash_get_current_key_ex( options_ht, &key, &key_len, &int_key, 0, NULL );
 
-                type = zend_hash_get_current_key_ex( options_ht, &key, &key_len, &int_key, 0, NULL );
-                
-                CHECK_CUSTOM_ERROR(( type != HASH_KEY_IS_STRING ), ctx, SS_SQLSRV_ERROR_INVALID_CONNECTION_KEY ) {
-                    throw ss::SSException();
-                }
-               
-                core::sqlsrv_zend_hash_get_current_data( ctx, options_ht, (void**) &data TSRMLS_CC );    
-                
-                if( key_len == sizeof( SSConnOptionNames::UID ) && !stricmp( key, SSConnOptionNames::UID )) { 
+				CHECK_CUSTOM_ERROR((type != HASH_KEY_IS_STRING), ctx, SS_SQLSRV_ERROR_INVALID_CONNECTION_KEY)
+				{
+					throw ss::SSException();
+				}
 
-                    *uid = Z_STRVAL_PP( data );
-                }
+				core::sqlsrv_zend_hash_get_current_data(ctx, options_ht, (void**)&data TSRMLS_CC);
+#endif
+              
+				//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+				if (key_len == sizeof(SSConnOptionNames::UID) && !_stricmp(key->val, SSConnOptionNames::UID))
+				{
+					*uid = Z_STRVAL(*data);
+				}
+				else if (key_len == sizeof(SSConnOptionNames::PWD) && !_stricmp(key->val, SSConnOptionNames::PWD))
+				{
+					*pwd = Z_STRVAL(*data);
+				}
+				else 
+				{
+					::add_conn_option_key(ctx, key->val, key_len, ss_conn_options_ht, &data TSRMLS_CC);
+				}
+#else
+				if (key_len == sizeof(SSConnOptionNames::UID) && !_stricmp(key, SSConnOptionNames::UID))
+				{
+					*uid = Z_STRVAL_PP(data);
+				}
+				else if (key_len == sizeof(SSConnOptionNames::PWD) && !_stricmp(key, SSConnOptionNames::PWD)) 
+				{
+					*pwd = Z_STRVAL_PP(data);
+				}
+				else {
 
-                else if( key_len == sizeof( SSConnOptionNames::PWD ) && !stricmp( key, SSConnOptionNames::PWD )) { 
-                    
-                    *pwd = Z_STRVAL_PP( data );
-                }
-                else {
+					::add_conn_option_key(ctx, key, key_len, ss_conn_options_ht, data TSRMLS_CC);
+				}
+#endif
 
-                    ::add_conn_option_key( ctx, key, key_len, ss_conn_options_ht, data TSRMLS_CC );
-                }
-            }
+#if PHP_MAJOR_VERSION >= 7
+				data = NULL;
+			}ZEND_HASH_FOREACH_END();
+#else
+		}// for loop
+#endif
+     
         } 
     }
-    catch( core::CoreException& ) {
+    catch( core::CoreException& ) 
+	{
         throw;
     }
 }

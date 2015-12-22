@@ -1,88 +1,59 @@
-# Microsoft Drivers for PHP for SQL Server
+# PHP7 Port of Microsoft Drivers for PHP for SQL Server
 
-**Welcome to the Microsoft Drivers for PHP for SQL Server project!**
+**Welcome to PHP7 port of Microsoft Drivers for PHP for SQL Server!**
 
-The Microsoft Drivers for PHP for SQL Server are PHP 5 extensions that allow for the reading and writing of SQL Server data from within PHP scripts. The release contains two drivers, the SQLSRV driver and the PDO_SQLSRV driver. The SQLSRV extension provides a procedural interface while the PDO_SQLSRV extension implements PDO for accessing data in all editions of SQL Server 2005 and later (including SQL Azure). These drivers rely on the Microsoft ODBC Driver 11 for SQL Server to handle the low-level communication with SQL Server.
+As we are excited about PHP7 and use Microsoft`s SQLServer driver for PHP and since it is not currently available for PHP7, 
+we have created a port for PHP7. Please note that this is initial stage and please see the section below regarding what is currently supported.
+The release contains two drivers, the SQLSRV driver and the PDO_SQLSRV driver. The SQLSRV extension provides a procedural interface while the PDO_SQLSRV extension implements PDO for accessing data in all editions of SQL Server 2005 and later (including SQL Azure). These drivers rely on the Microsoft ODBC Driver 11 for SQL Server to handle the low-level communication with SQL Server.
 
 Microsoft has published the source code to the driver on this site. With each successive update, we will revisit this plan. We've seen too many projects over-reach in their plans to be responsive to the community. We would prefer to start with a more conservative approach and make sure we're successfully delivering on that before expanding. We understand that many developers will download the source code to create their own build(s) of the driver. However, Microsoft supports only the Microsoft signed versions of the driver.
 
-We hope you enjoy using the Microsoft Drivers for PHP for SQL Server.
+Thomson Reuters FATCA Technology Team
 
-The Microsoft Drivers for PHP for SQL Server Team
+## List of supported functionality and features
 
-## Announcements
+1. Currently we are not porting PDO_SQLSRV extension and targeting only SQLSRV extension.
 
-Please visit the [blog][blog] for more announcements.
+2. This port also includes Robert Johnson`s patch we have been using which can be found at :
+	
+		http://robsphp.blogspot.com/2012/06/unofficial-microsoft-sql-server-driver.html
 
-## Prerequisites
+3. As for our own project, we have currently ported a limited test of SQLSRV functions , which can be seen as below : 
+				
+			sqlsrv_connect
+			sqlsrv_close
+			sqlsrv_errors
+			sqlsrv_prepare
+			sqlsrv_free_stmt
+			sqlsrv_execute
+			sqlsrv_num_field
+			sqlsrv_next_result
+			sqlsrv_fetch_array
+			sqlsrv_configure
+			sqlsrv_query
+			sqlsrv_num_rows
+			sqlsrv_field_metadata
 
-You must first be able to build PHP without including these
-extensions.  For help with doing this, see the [official PHP website][phpweb].
+4. As we found issues with brand new PHP7 Zend memory manager, our current port doesn`t support 
+Zend memory manager. In order to use you have to set USE_ZEND_ALLOC environment variable to zero.
+Otherwise the extension will fail during initialisation. As we are working on this , we are planning
+to remove that limitation as soon as possible.
+
+## Prerequisites 
+
+You will need to install Visual C++ 2015 runtime :
+https://www.microsoft.com/en-us/download/details.aspx?id=48145
 
 ## Build
 
-To compile the SQLSRV and PDO_SQLSRV:
+The instructions are not different from the original driver , which can be seen here :
+https://github.com/Azure/msphpsql
 
-1. Copy the source code directories from this repository into the ext
-subdirectory.
+## Source code information
 
-2. Run buildconf.bat to rebuild the configure.js script to include the
-new drivers.
-
-3. Run "cscript configure.js --enable-sqlsrv=shared --enable-pdo
---with-pdo-sqlsrv=shared [other options]" to generate the makefile.
-Run "cscript configure.js --help" to see what other options are
-available.  It is possible (and even probable) that other extensions
-will have to be disabled or enabled for the compile to succeed.
-Search bing.com for configurations that have worked for other people.
-  * It might be possible to compile these extensions as non-shared but that configuration has not been tested.
-  * NB: To build the driver with PHP 5.6.7 and later, you will need to specify the --with-odbcver=0x0380 argument to configure.js
-
-4. Run "nmake".  It is suggested that you run the entire build.  If you
-wish to do so, run "nmake clean" first.
-
-5. To install the resulting build, run "nmake install" or just copy
-php_sqlsrv.dll and php_pdo_sqlsrv.dll to your PHP extension directory.
-Also enable them within your PHP installation's php.ini file.
-
-This software has been compiled and tested under PHP 5.4.32 and later
-using the Visual C++ 2008 and 2012, Express and Standard compilers.
-
-## Documentation
-
-This driver is documented on [Microsoft's Documentation web site][phpdoc].
-
-## Changes
-
-For details about the changes included in this release, please see our [blog][blog] or see the SQLSRV_Readme.htm 
-file that is part of the download package.
-
-## Known Issues
-
-Please visit the [project on Github][project] to view outstanding [issues][issues].
-
-## Downlod the driver
-The driver can be downloaded from the [Microsoft Download Center][link]
-
-## Notes
-
-####Note about version.h
-
-The version numbers in version.h in the source do not match the
-version numbers in the supported PHP extension.
+As mentioned above , this project also includes another unofficial patch. Except from that you can search for "//PHP7 Port" in the project to see the PHP7 considerations.
+We also have added a new file ( zend_utility.h ) to the project which contains a few macros and functions for porting considerations and also for exploring new PHP7 engine.
 
 ## License
 
 The Microsoft Drivers for PHP for SQL Server are licensed under the MIT license.  See the LICENSE file for more details.
-
-[blog]: http://blogs.msdn.com/b/sqlphp/
-
-[project]: https://github.com/Azure/msphpsql
-
-[issues]: https://github.com/Azure/msphpsql/issues
-
-[phpweb]: http://php.net
-
-[phpdoc]: http://msdn.microsoft.com/en-us/library/dd903047%28SQL.11%29.aspx
-
-[link]: https://www.microsoft.com/en-us/download/details.aspx?id=20098

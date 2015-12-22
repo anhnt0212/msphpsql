@@ -1,7 +1,7 @@
 //---------------------------------------------------------------------------------------------------------------------------------
-// File: core_results.cpp
+// File: core_stream.cpp
 //
-// Contents: Result sets
+// Contents: Implementation of PHP streams for reading SQL Server data
 //
 // Microsoft Drivers 3.2 for PHP for SQL Server
 // Copyright(c) Microsoft Corporation
@@ -79,7 +79,12 @@ SQLPOINTER read_lob_field( sqlsrv_stmt* stmt, SQLUSMALLINT field_index, sqlsrv_b
                            unsigned long mem_used TSRMLS_DC );
 
 // dtor for each row in the cache
+//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+void cache_row_dtor(zval* data);
+#else
 void cache_row_dtor( void* data );
+#endif
 
 // convert a number to a string using locales
 // There is an extra copy here, but given the size is short (usually <20 bytes) and the complications of
@@ -154,10 +159,9 @@ sqlsrv_error* odbc_get_diag_rec( sqlsrv_stmt* odbc, SQLSMALLINT record_number )
     SQLWCHAR wsql_state[ SQL_SQLSTATE_BUFSIZE ];
     SQLWCHAR wnative_message[ SQL_MAX_MESSAGE_LENGTH + 1 ];
     SQLINTEGER native_code;
-    SQLSMALLINT wnative_message_len = 0;
+	SQLSMALLINT cchMsg=0;
 
-    SQLRETURN r = SQLGetDiagRecW( SQL_HANDLE_STMT, odbc->handle(), record_number, wsql_state, &native_code, wnative_message, 
-                                  SQL_MAX_MESSAGE_LENGTH + 1, &wnative_message_len );
+	SQLRETURN r = SQLGetDiagRecW( SQL_HANDLE_STMT, odbc->handle(), record_number, wsql_state, &native_code, wnative_message, ARRAYELEMENTS(wnative_message), &cchMsg );
     if( !SQL_SUCCEEDED( r ) || r == SQL_NO_DATA ) {
         return NULL;
     }
@@ -169,20 +173,13 @@ sqlsrv_error* odbc_get_diag_rec( sqlsrv_stmt* odbc, SQLSMALLINT record_number )
     }
 
     // convert the error into the encoding of the context
-    sqlsrv_malloc_auto_ptr<SQLCHAR> sql_state;
-    SQLINTEGER sql_state_len = 0;
-    if (!convert_string_from_utf16( enc, wsql_state, sizeof(wsql_state), (char**)&sql_state, sql_state_len )) {
-        return NULL;
-    }
-    
-    sqlsrv_malloc_auto_ptr<SQLCHAR> native_message;
-    SQLINTEGER native_message_len = 0;
-    if (!convert_string_from_utf16( enc, wnative_message, wnative_message_len, (char**)&native_message, native_message_len )) {
-        return NULL;
-    }
+    SQLLEN state_len = ARRAYELEMENTS(wsql_state);
+    SQLLEN message_len = cchMsg;
 
-    return new (sqlsrv_malloc( sizeof( sqlsrv_error ))) sqlsrv_error( (SQLCHAR*) sql_state, (SQLCHAR*) native_message, 
-                                                                      native_code );
+    return new (sqlsrv_malloc( sizeof( sqlsrv_error ))) sqlsrv_error( 
+		(SQLCHAR*)convert_string_from_utf16( enc, wsql_state, state_len).transferred(),  
+		(SQLCHAR*)convert_string_from_utf16( enc, wnative_message, message_len ).transferred(), 
+		native_code );
 }
 
 }   // namespace
@@ -260,9 +257,11 @@ sqlsrv_buffered_result_set::sqlsrv_buffered_result_set( sqlsrv_stmt* stmt TSRMLS
 
     core::sqlsrv_zend_hash_init( *stmt, cache, 10 /* # of buckets */, NULL /* hashfn */, cache_row_dtor /*dtor*/, 0 /*persistent*/ 
                                  TSRMLS_CC );
+
     col_count = core::SQLNumResultCols( stmt TSRMLS_CC );
     // there is no result set to buffer
-    if( col_count == 0 ) {
+    if( col_count == 0 ) 
+	{
         return;
     }
 
@@ -522,8 +521,14 @@ sqlsrv_buffered_result_set::sqlsrv_buffered_result_set( sqlsrv_stmt* stmt TSRMLS
         SQLSRV_ASSERT( row_count < LONG_MAX, "Hard maximum of 2 billion rows exceeded in a buffered query" );
 
         // add it to the cache
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		row_dtor_closure cl(this, row);
+		sqlsrv_zend_hash_next_index_insert(*stmt, cache, (zval *)&cl, sizeof(cl) TSRMLS_CC);
+#else
         row_dtor_closure cl( this, row );
         sqlsrv_zend_hash_next_index_insert( *stmt, cache, &cl, sizeof( cl ) TSRMLS_CC );
+#endif
     }
 
 }
@@ -643,7 +648,7 @@ SQLRETURN sqlsrv_buffered_result_set::get_diag_field( SQLSMALLINT record_number,
     SQLSRV_ASSERT( buffer_length >= SQL_SQLSTATE_BUFSIZE, 
                    "Buffer not big enough to return SQLSTATE in sqlsrv_buffered_result_set::get_diag_field" );
 
-    if( last_error == NULL ) {
+    if( !last_error ) {
         return SQL_NO_DATA;
     }
 
@@ -657,16 +662,29 @@ SQLRETURN sqlsrv_buffered_result_set::get_diag_field( SQLSMALLINT record_number,
 
 unsigned char* sqlsrv_buffered_result_set::get_row( void )
 {
-    row_dtor_closure* cl_ptr;
-    int zr = zend_hash_index_find( cache, current - 1, (void**) &cl_ptr );
-    SQLSRV_ASSERT( zr == SUCCESS, "Failed to find row %1!d! in the cache", current );
-    return cl_ptr->row_data;
+	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	zval* cl_ptr_zval = NULL;
+	if ( (cl_ptr_zval = zend_hash_index_find(cache, current - 1)) == NULL)
+	{
+		int zr = 1;
+		SQLSRV_ASSERT(zr == SUCCESS, "Failed to find row %1!d! in the cache", current);
+	}
+
+	row_dtor_closure* cl_ptr = (row_dtor_closure *)cl_ptr_zval;
+	return cl_ptr->row_data;
+#elif
+	row_dtor_closure* cl_ptr;
+	int zr = zend_hash_index_find(cache, current - 1, (void**)&cl_ptr);
+	SQLSRV_ASSERT(zr == SUCCESS, "Failed to find row %1!d! in the cache", current);
+	return cl_ptr->row_data;
+#endif
 }
 
 sqlsrv_error* sqlsrv_buffered_result_set::get_diag_rec( SQLSMALLINT record_number )
 {
     // we only hold a single error if there is one, otherwise return the ODBC error(s)
-    if( last_error == NULL ) {
+    if( !last_error ) {
         return odbc_get_diag_rec( odbc, record_number );
     }
     if( record_number > 1 ) {
@@ -693,7 +711,7 @@ SQLRETURN binary_to_string( SQLCHAR* field_data, SQLLEN& read_so_far,  __out voi
     // hex characters for the conversion loop below
     static char hex_chars[] = "0123456789ABCDEF";
 
-    SQLSRV_ASSERT( out_error == NULL, "Pending error for sqlsrv_buffered_results_set::binary_to_string" );
+    SQLSRV_ASSERT( !out_error, "Pending error for sqlsrv_buffered_results_set::binary_to_string" );
 
     SQLRETURN r = SQL_ERROR;
 
@@ -927,7 +945,7 @@ SQLRETURN sqlsrv_buffered_result_set::wstring_to_long( SQLSMALLINT field_index, 
 SQLRETURN sqlsrv_buffered_result_set::system_to_wide_string( SQLSMALLINT field_index, __out void* buffer, SQLLEN buffer_length, 
                                                              __out SQLLEN* out_buffer_length )
 {
-    SQLSRV_ASSERT( last_error == NULL, "Pending error for sqlsrv_buffered_results_set::system_to_wide_string" );
+    SQLSRV_ASSERT( !last_error, "Pending error for sqlsrv_buffered_results_set::system_to_wide_string" );
     SQLSRV_ASSERT( buffer_length % 2 == 0, "Odd buffer length passed to sqlsrv_buffered_result_set::system_to_wide_string" );
 
     SQLRETURN r = SQL_ERROR;
@@ -1015,7 +1033,7 @@ SQLRETURN sqlsrv_buffered_result_set::system_to_wide_string( SQLSMALLINT field_i
 SQLRETURN sqlsrv_buffered_result_set::to_same_string( SQLSMALLINT field_index, __out void* buffer, SQLLEN buffer_length, 
                                                        __out SQLLEN* out_buffer_length )
 {
-    SQLSRV_ASSERT( last_error == NULL, "Pending error for sqlsrv_buffered_results_set::to_same_string" );
+    SQLSRV_ASSERT( !last_error, "Pending error for sqlsrv_buffered_results_set::to_same_string" );
 
     SQLRETURN r = SQL_ERROR;
     unsigned char* row = get_row();
@@ -1085,7 +1103,7 @@ SQLRETURN sqlsrv_buffered_result_set::to_same_string( SQLSMALLINT field_index, _
 SQLRETURN sqlsrv_buffered_result_set::wide_to_system_string( SQLSMALLINT field_index, __out void* buffer, SQLLEN buffer_length, 
                                                              __out SQLLEN* out_buffer_length )
 {
-    SQLSRV_ASSERT( last_error == NULL, "Pending error for sqlsrv_buffered_results_set::wide_to_system_string" );
+    SQLSRV_ASSERT( !last_error, "Pending error for sqlsrv_buffered_results_set::wide_to_system_string" );
 
     SQLRETURN r = SQL_ERROR;
     unsigned char* row = get_row();
@@ -1206,23 +1224,28 @@ SQLRETURN sqlsrv_buffered_result_set::to_double( SQLSMALLINT field_index, __out 
 namespace {
 
 // called for each row in the cache when the cache is destroyed in the destructor
-void cache_row_dtor( void* data )
+#if PHP_MAJOR_VERSION >= 7
+void cache_row_dtor(zval* data)
+#else
+void cache_row_dtor(void* data)
+#endif
 {
-    row_dtor_closure* cl = reinterpret_cast<row_dtor_closure*>( data );
-    BYTE* row = cl->row_data;
-    // don't release this here, since this is called from the destructor of the result_set
-    sqlsrv_buffered_result_set* result_set = cl->results;
+	row_dtor_closure* cl = reinterpret_cast<row_dtor_closure*>(data);
+	BYTE* row = cl->row_data;
+	// don't release this here, since this is called from the destructor of the result_set
+	sqlsrv_buffered_result_set* result_set = cl->results;
 
-    for( SQLSMALLINT i = 0; i < result_set->column_count(); ++i ) {
+	for (SQLSMALLINT i = 0; i < result_set->column_count(); ++i) 
+	{
+		if (result_set->col_meta_data(i).length == sqlsrv_buffered_result_set::meta_data::SIZE_UNKNOWN) 
+		{
 
-        if( result_set->col_meta_data(i).length == sqlsrv_buffered_result_set::meta_data::SIZE_UNKNOWN ) {
+			void* out_of_row_data = *reinterpret_cast<void**>(&row[result_set->col_meta_data(i).offset]);
+			sqlsrv_free(out_of_row_data);
+		}
+	}
 
-            void* out_of_row_data = *reinterpret_cast<void**>( &row[ result_set->col_meta_data(i).offset ] );
-            sqlsrv_free( out_of_row_data );
-        }
-    }
-
-    sqlsrv_free( row );
+	sqlsrv_free(row);
 }
 
 SQLPOINTER read_lob_field( sqlsrv_stmt* stmt, SQLUSMALLINT field_index, sqlsrv_buffered_result_set::meta_data& meta, 
