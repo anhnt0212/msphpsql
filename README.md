@@ -3,8 +3,9 @@
 **Welcome to PHP7 port of Microsoft Drivers for PHP for SQL Server!**
 
 As we are excited about PHP7 and use Microsoft`s SQLServer driver for PHP and since it is not currently available for PHP7, 
-we have created a port for PHP7. Please note that this is initial stage and please see the section below regarding what is currently supported.
-The release contains two drivers, the SQLSRV driver and the PDO_SQLSRV driver. The SQLSRV extension provides a procedural interface while the PDO_SQLSRV extension implements PDO for accessing data in all editions of SQL Server 2005 and later (including SQL Azure). These drivers rely on the Microsoft ODBC Driver 11 for SQL Server to handle the low-level communication with SQL Server.
+we have created a port for PHP7. For the original project please visit https://github.com/azure/msphpsql .
+Please note that this is initial stage and please see the section below regarding what is currently supported.
+
 
 Microsoft has published the source code to the driver on this site. With each successive update, we will revisit this plan. We've seen too many projects over-reach in their plans to be responsive to the community. We would prefer to start with a more conservative approach and make sure we're successfully delivering on that before expanding. We understand that many developers will download the source code to create their own build(s) of the driver. However, Microsoft supports only the Microsoft signed versions of the driver.
 
