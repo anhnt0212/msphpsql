@@ -37,9 +37,9 @@ Thomson Reuters FATCA Technology Team
 ## Known issues
 
 1. Currently an issue in the resource system is causing 44 bytes of memory leak per sqlsrv_prepare. And it also prevents us
-to do sqlsrv_connect & sqlsrv)disconnect multiples times.
+to do sqlsrv_connect & sqlsrv)disconnect multiples times. We will fix this one soon.
 
-2. For the time being
+2. For the time being, we are returning a string instead of PHP Datetime object in sqlsrv_fetch_array. We will fix this soon.
 
 3. Official sqlsrv_num_rows documentation on http://php.net/manual/en/function.sqlsrv-num-rows.php is misleading.
    If you look at SQL Native Client documentation on https://msdn.microsoft.com/en-us/library/ms711835(v=vs.85).aspx 
@@ -65,8 +65,8 @@ For your questions, please contact akin.ocal@thomsonreuters.com
 As mentioned above , this project also includes another unofficial patch. Other than that you can search for "//PHP7 Port" in the project to see the PHP7 considerations.
 Other main changes are :
 1. We centralised all memory allocations and frees in new core_memory.h file. We also added CRT debugging features to the same header file such as programatic
-   breakpoints, CRT memory function hooks and CRT debug heap reporting. You can turn these on by adding SQLSRV_MEM_DEBUG=1 to your preprocessor.
-2. We are using static memory with std::array for error and warning reporting : core_errors.have
+   breakpoints, CRT memory function hooks and CRT debug heap reporting. You can turn these on by adding SQLSRV_MEM_DEBUG=1 and SQLSRV_HOOK_CRT_MALLOC=1 to your preprocessor.
+2. We are using static memory with std::array for error and warning reporting : core_errors.h
 3. We also have added a new file ( zend_utility.h ) to the project which contains a few macros and functions for porting considerations and also for exploring new PHP7 engine.
 
 ## License
