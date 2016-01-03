@@ -64,6 +64,7 @@ For your questions, please contact akin.ocal@thomsonreuters.com
 
 As mentioned above , this project also includes another unofficial patch. Other than that you can search for "//PHP7 Port" in the project to see the PHP7 considerations.
 Other main changes are :
+
 1. We centralised all memory allocations and frees in new core_memory.h file. We also added CRT debugging features to the same header file such as programatic
    breakpoints, CRT memory function hooks and CRT debug heap reporting. You can turn these on by adding SQLSRV_MEM_DEBUG=1 and SQLSRV_HOOK_CRT_MALLOC=1 to your preprocessor.
 
