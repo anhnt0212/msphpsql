@@ -100,7 +100,7 @@ sqlsrv_conn* core_sqlsrv_connect( sqlsrv_context& henv_cp, sqlsrv_context& henv_
     SQLRETURN r;
     std::string conn_str;
     conn_str.reserve( DEFAULT_CONN_STR_LEN );
-    sqlsrv_malloc_auto_ptr<sqlsrv_conn> conn;
+    sqlsrv_malloc_auto_ptr<sqlsrv_conn, true> conn;
     sqlsrv_malloc_auto_ptr<wchar_t> wconn_string;
     unsigned int wconn_len = 0;
 
@@ -203,10 +203,12 @@ sqlsrv_conn* core_sqlsrv_connect( sqlsrv_context& henv_cp, sqlsrv_context& henv_
         throw core::CoreException();
     }
 
+
     CHECK_SQL_WARNING_AS_ERROR( r, conn )
     {
         throw core::CoreException();
     }
+
 
     // determine the version of the server we're connected to.  The server version is left in the 
     // connection upon return.
@@ -237,7 +239,7 @@ sqlsrv_conn* core_sqlsrv_connect( sqlsrv_context& henv_cp, sqlsrv_context& henv_
         conn_str.clear();
         memset( (void *)(wchar_t *)wconn_string, 0, wconn_len * sizeof( wchar_t )); // wconn_len is the number of characters, not bytes
         conn->invalidate();
-        throw;        
+		throw;
     }
 
     sqlsrv_conn* return_conn = conn;
@@ -351,8 +353,11 @@ void core_sqlsrv_close( sqlsrv_conn* conn TSRMLS_DC )
 
     // free the connection handle
     conn->invalidate();
-
-    sqlsrv_free( conn );
+#if PHP_MAJOR_VERSION >= 7
+    sqlsrv_free( conn, true );
+#else
+	sqlsrv_free(conn);
+#endif
 }
 
 // core_sqlsrv_prepare
@@ -413,7 +418,7 @@ void core_sqlsrv_get_server_version( sqlsrv_conn* conn, __out zval *server_versi
         get_server_version( conn, &buffer, buffer_len TSRMLS_CC );
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-        ZVAL_STRINGL( server_version, buffer, buffer_len );
+		sqlsrv_malloc_zend_string( server_version, buffer, buffer_len );
 #else
 		ZVAL_STRINGL(server_version, buffer, buffer_len, 0);
 #endif
@@ -620,7 +625,7 @@ void build_connection_string_and_set_conn_attr( sqlsrv_conn* conn, const char* s
 #if PHP_MAJOR_VERSION >= 7
 			if (zend_hash_index_find(options, SQLSRV_CONN_OPTION_TRACE_ON) == NULL)
 			{
-				zend_hash_index_del(options, SQLSRV_CONN_OPTION_TRACE_FILE);
+				core::sqlsrv_zend_hash_index_del(options, SQLSRV_CONN_OPTION_TRACE_FILE);
 			}
 #else
             int zr = zend_hash_index_find( options, SQLSRV_CONN_OPTION_TRACE_ON, (void**)&trace_value );
@@ -634,18 +639,21 @@ void build_connection_string_and_set_conn_attr( sqlsrv_conn* conn, const char* s
         
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		for (zend_hash_internal_pointer_reset(options);
-		zend_hash_has_more_elements(options) == SUCCESS;
-			zend_hash_move_forward(options)) {
-			HashPosition pos = 0;
+		HashPosition pos;
+		for (zend_hash_internal_pointer_reset_ex(options, &pos); ; zend_hash_move_forward_ex(options, &pos)) 
+		{
 			int type = HASH_KEY_NON_EXISTENT;
 			zend_string *key = NULL;
 			unsigned int key_len = -1;
 			zend_ulong index = -1;
 			
 			zval* data = NULL;
-
 			type = zend_hash_get_current_key_ex(options, &key, &index, &pos);
+
+			if (HASH_KEY_NON_EXISTENT == type)
+			{
+				break;
+			}
 #else
 		for (zend_hash_internal_pointer_reset(options);
 		zend_hash_has_more_elements(options) == SUCCESS;
@@ -662,7 +670,7 @@ void build_connection_string_and_set_conn_attr( sqlsrv_conn* conn, const char* s
             
             // The driver layer should ensure a valid key.
             DEBUG_SQLSRV_ASSERT(( type == HASH_KEY_IS_LONG ), "build_connection_string_and_set_conn_attr: invalid connection option key type." );
-			core::sqlsrv_zend_hash_get_current_data(*conn, options, (void**)&data TSRMLS_CC);
+			data = core::sqlsrv_zend_hash_get_current_data_ex(options, &pos);
 
             conn_opt = get_connection_option( conn, index, valid_conn_opts TSRMLS_CC );
     
@@ -820,7 +828,7 @@ int core_str_zval_is_true( zval* value_z )
     // save adjustments to the value made by stripping whitespace at the end
 	//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-	ZVAL_STRINGL(value_z, value_in, val_len);
+	sqlsrv_malloc_zend_string(value_z, value_in, val_len);
 #else
     ZVAL_STRINGL( value_z, value_in, val_len, 0 );
 #endif

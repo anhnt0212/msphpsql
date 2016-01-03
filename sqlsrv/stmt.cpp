@@ -24,8 +24,6 @@
 #include <zend.h>
 #include <zend_globals.h>
 
-
-
 //
 // *** internal variables and constants ***
 //
@@ -90,7 +88,11 @@ const char SS_SQLSRV_WARNING_PARAM_VAR_NOT_REF[] = "Variable parameter %d not pa
 
 /* internal functions */
 
+#if PHP_MAJOR_VERSION >= 7
+void convert_to_zval(SQLSRV_PHPTYPE sqlsrv_php_type, void** in_val, SQLLEN field_len,zval* out_zval);
+#else
 zval* convert_to_zval(SQLSRV_PHPTYPE sqlsrv_php_type, void** in_val, SQLLEN field_len);
+#endif
 void fetch_fields_common( __inout ss_sqlsrv_stmt* stmt, int fetch_type, __out zval* return_value, bool allow_empty_field_names 
                           TSRMLS_DC );
 bool determine_column_size_or_precision( sqlsrv_stmt const* stmt, sqlsrv_sqltype sqlsrv_type, __out SQLUINTEGER* column_size, 
@@ -145,7 +147,7 @@ ss_sqlsrv_stmt::~ss_sqlsrv_stmt( void )
 	{
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		zval_ptr_dtor(params_z);
+		zval_destructor(params_z);
 #else
         zval_ptr_dtor( &params_z );
 #endif
@@ -302,6 +304,7 @@ PHP_FUNCTION( sqlsrv_execute )
 
         // bind parameters before executing
         bind_params( stmt TSRMLS_CC );
+
 
         core_sqlsrv_execute( stmt TSRMLS_CC );
 
@@ -462,81 +465,127 @@ PHP_FUNCTION( sqlsrv_field_metadata )
 
     // get the number of fields in the resultset
     num_cols = core::SQLNumResultCols( stmt TSRMLS_CC );
-
-    zval_auto_ptr result_meta_data;
+	
+#if PHP_MAJOR_VERSION >= 7
+	array_init(return_value);
+	// initialize the array
+	
+#else
+	result_meta_data = (zval *)
 	ALLOC_INIT_ZVAL(result_meta_data);
+	core::sqlsrv_array_init(*stmt, result_meta_data TSRMLS_CC);
+#endif
 
-    core::sqlsrv_array_init( *stmt, result_meta_data TSRMLS_CC );
-    
-    for( SQLSMALLINT f = 0; f < num_cols; ++f ) {
+    for( SQLSMALLINT f = 0; f < num_cols; ++f ) 
+	{
     
         sqlsrv_malloc_auto_ptr<field_meta_data> core_meta_data( core_sqlsrv_field_metadata( stmt, f TSRMLS_CC ) );
+       
+#if PHP_MAJOR_VERSION >= 7
+		zval field_array;
+		array_init(&field_array);
+		
+		core::sqlsrv_add_assoc_string(*stmt, &field_array, FieldMetaData::NAME, (char *)(core_meta_data->field_name), 0 TSRMLS_CC);
 
-        // initialize the array
-        zval_auto_ptr field_array;
+		core::sqlsrv_add_assoc_long(*stmt, &field_array, FieldMetaData::TYPE, core_meta_data->field_type TSRMLS_CC);
+		
+		switch (core_meta_data->field_type) {
+		case SQL_DECIMAL:
+		case SQL_NUMERIC:
+		case SQL_TYPE_TIMESTAMP:
+		case SQL_TYPE_DATE:
+		case SQL_SS_TIME2:
+		case SQL_SS_TIMESTAMPOFFSET:
+			core::sqlsrv_add_assoc_null(*stmt, &field_array, FieldMetaData::SIZE TSRMLS_CC);
+			core::sqlsrv_add_assoc_long(*stmt, &field_array, FieldMetaData::PREC, core_meta_data->field_precision TSRMLS_CC);
+			core::sqlsrv_add_assoc_long(*stmt, &field_array, FieldMetaData::SCALE, core_meta_data->field_scale TSRMLS_CC);
+			break;
+		case SQL_BIT:
+		case SQL_TINYINT:
+		case SQL_SMALLINT:
+		case SQL_INTEGER:
+		case SQL_BIGINT:
+		case SQL_REAL:
+		case SQL_FLOAT:
+		case SQL_DOUBLE:
+			core::sqlsrv_add_assoc_null(*stmt, &field_array, FieldMetaData::SIZE TSRMLS_CC);
+			core::sqlsrv_add_assoc_long(*stmt, &field_array, FieldMetaData::PREC, core_meta_data->field_precision TSRMLS_CC);
+			core::sqlsrv_add_assoc_null(*stmt, &field_array, FieldMetaData::SCALE TSRMLS_CC);
+			break;
+		default:
+			core::sqlsrv_add_assoc_long(*stmt, &field_array, FieldMetaData::SIZE, core_meta_data->field_size TSRMLS_CC);
+			core::sqlsrv_add_assoc_null(*stmt, &field_array, FieldMetaData::PREC TSRMLS_CC);
+			core::sqlsrv_add_assoc_null(*stmt, &field_array, FieldMetaData::SCALE TSRMLS_CC);
+			break;
+		}
+
+		// add the nullability to the array
+		core::sqlsrv_add_assoc_long(*stmt, &field_array, FieldMetaData::NULLABLE, core_meta_data->field_is_nullable
+			TSRMLS_CC);
+
+		// add this field's meta data to the result set meta data
+		core::sqlsrv_add_next_index_zval(*stmt, return_value, &field_array TSRMLS_CC);
+
+		
+#else
+		// initialize the array
+		zval_auto_ptr field_array;
 		ALLOC_INIT_ZVAL(field_array);
 
-        core::sqlsrv_array_init( *stmt, field_array TSRMLS_CC );
+		core::sqlsrv_array_init(*stmt, field_array TSRMLS_CC);
 
-        core::sqlsrv_add_assoc_string( *stmt, field_array, FieldMetaData::NAME, (char *)(core_meta_data->field_name.transferred()), 0 TSRMLS_CC );
+		core::sqlsrv_add_assoc_string(*stmt, field_array, FieldMetaData::NAME, (char *)(core_meta_data->field_name.transferred()), 0 TSRMLS_CC);
 
-        core::sqlsrv_add_assoc_long( *stmt, field_array, FieldMetaData::TYPE, core_meta_data->field_type TSRMLS_CC );
+		core::sqlsrv_add_assoc_long(*stmt, field_array, FieldMetaData::TYPE, core_meta_data->field_type TSRMLS_CC);
 
-        switch( core_meta_data->field_type ) {
-            case SQL_DECIMAL:
-            case SQL_NUMERIC:
-            case SQL_TYPE_TIMESTAMP:
-            case SQL_TYPE_DATE:
-            case SQL_SS_TIME2:
-            case SQL_SS_TIMESTAMPOFFSET:
-                core::sqlsrv_add_assoc_null( *stmt, field_array, FieldMetaData::SIZE TSRMLS_CC );
-                core::sqlsrv_add_assoc_long( *stmt, field_array, FieldMetaData::PREC, core_meta_data->field_precision TSRMLS_CC );
-                core::sqlsrv_add_assoc_long( *stmt, field_array, FieldMetaData::SCALE, core_meta_data->field_scale TSRMLS_CC );
-                break;
-            case SQL_BIT:
-            case SQL_TINYINT:
-            case SQL_SMALLINT:
-            case SQL_INTEGER:
-            case SQL_BIGINT:
-            case SQL_REAL:
-            case SQL_FLOAT:
-            case SQL_DOUBLE:
-                core::sqlsrv_add_assoc_null( *stmt, field_array, FieldMetaData::SIZE TSRMLS_CC );
-                core::sqlsrv_add_assoc_long( *stmt, field_array, FieldMetaData::PREC, core_meta_data->field_precision TSRMLS_CC );
-                core::sqlsrv_add_assoc_null( *stmt, field_array, FieldMetaData::SCALE TSRMLS_CC );
-                break;
-            default:
-                core::sqlsrv_add_assoc_long( *stmt, field_array, FieldMetaData::SIZE, core_meta_data->field_size TSRMLS_CC );
-                core::sqlsrv_add_assoc_null( *stmt, field_array, FieldMetaData::PREC TSRMLS_CC );
-                core::sqlsrv_add_assoc_null( *stmt, field_array, FieldMetaData::SCALE TSRMLS_CC );
-                break;
-        }
+		switch (core_meta_data->field_type) {
+		case SQL_DECIMAL:
+		case SQL_NUMERIC:
+		case SQL_TYPE_TIMESTAMP:
+		case SQL_TYPE_DATE:
+		case SQL_SS_TIME2:
+		case SQL_SS_TIMESTAMPOFFSET:
+			core::sqlsrv_add_assoc_null(*stmt, field_array, FieldMetaData::SIZE TSRMLS_CC);
+			core::sqlsrv_add_assoc_long(*stmt, field_array, FieldMetaData::PREC, core_meta_data->field_precision TSRMLS_CC);
+			core::sqlsrv_add_assoc_long(*stmt, field_array, FieldMetaData::SCALE, core_meta_data->field_scale TSRMLS_CC);
+			break;
+		case SQL_BIT:
+		case SQL_TINYINT:
+		case SQL_SMALLINT:
+		case SQL_INTEGER:
+		case SQL_BIGINT:
+		case SQL_REAL:
+		case SQL_FLOAT:
+		case SQL_DOUBLE:
+			core::sqlsrv_add_assoc_null(*stmt, field_array, FieldMetaData::SIZE TSRMLS_CC);
+			core::sqlsrv_add_assoc_long(*stmt, field_array, FieldMetaData::PREC, core_meta_data->field_precision TSRMLS_CC);
+			core::sqlsrv_add_assoc_null(*stmt, field_array, FieldMetaData::SCALE TSRMLS_CC);
+			break;
+		default:
+			core::sqlsrv_add_assoc_long(*stmt, field_array, FieldMetaData::SIZE, core_meta_data->field_size TSRMLS_CC);
+			core::sqlsrv_add_assoc_null(*stmt, field_array, FieldMetaData::PREC TSRMLS_CC);
+			core::sqlsrv_add_assoc_null(*stmt, field_array, FieldMetaData::SCALE TSRMLS_CC);
+			break;
+		}
 
-        // add the nullability to the array
-        core::sqlsrv_add_assoc_long( *stmt, field_array, FieldMetaData::NULLABLE, core_meta_data->field_is_nullable
-                                          TSRMLS_CC );
-       
-        // add this field's meta data to the result set meta data
-        core::sqlsrv_add_next_index_zval( *stmt, result_meta_data, field_array.transferred() TSRMLS_CC );
+		// add the nullability to the array
+		core::sqlsrv_add_assoc_long(*stmt, field_array, FieldMetaData::NULLABLE, core_meta_data->field_is_nullable
+			TSRMLS_CC);
+		
+		// add this field's meta data to the result set meta data
+		core::sqlsrv_add_next_index_zval(*stmt, result_meta_data, field_array.transferred() TSRMLS_CC);
 
-        // always good to call destructor for allocations done through placement new operator.
-        // core_meta_data->~field_meta_data(); // no! no point in using encapsulation then.
+		// always good to call destructor for allocations done through placement new operator.
+		// core_meta_data->~field_meta_data(); // no! no point in using encapsulation then.
 		// core_meta_data = NULL; // test, it goes out of scope here anyway.
-    }
+#endif
 
-    // return our built collection and transfer ownership
-	//PHP7 Port
-#if PHP_MAJOR_VERSION >= 7
-	zval_ptr_dtor(return_value);
-	RETVAL_ZVAL(result_meta_data.transferred(), 1, 1);
-#else
+    }
+#if PHP_MAJOR_VERSION < 7
 	zval_ptr_dtor(&return_value);
 	*return_value_ptr = result_meta_data.transferred();
 #endif
-    
-   
-
-    }
+    }//TRY
     catch( core::CoreException& ) {
 
         RETURN_FALSE;
@@ -574,9 +623,19 @@ PHP_FUNCTION( sqlsrv_next_result )
     PROCESS_PARAMS( stmt, "r", _FN_, 0 );
 
     try {
-        
-        core_sqlsrv_next_result( stmt TSRMLS_CC, true );
 
+		
+#if PHP_MAJOR_VERSION >= 7
+		core_sqlsrv_next_result(stmt, true, false);
+		// 666
+		// Pass false to throw_on_exceptions for now to avoid a memory leak
+		// which is inside core_sqlsrv_next_result-> core::SQLMoreResults -> CHECK_SQL_ERROR_OR_WARNING
+#else
+        core_sqlsrv_next_result( stmt TSRMLS_CC, true );
+#endif
+
+		RETURN_FALSE;
+		
         if( stmt->past_next_result_end ) {
 
             RETURN_NULL();
@@ -900,7 +959,11 @@ PHP_FUNCTION( sqlsrv_fetch_object )
 			// take the parameters given as our last argument and put them into a sequential array
 			sqlsrv_malloc_auto_ptr<zval**> params_m;
 			zval_auto_ptr ctor_retval_z;
+#if PHP_MAJOR_VERSION >= 7 
+			sqlsrv_malloc_zval(&ctor_retval_z);
+#else
 			ALLOC_INIT_ZVAL(ctor_retval_z);
+#endif
             int num_params = 0;
 
             if( ctor_params_z != NULL ) 
@@ -910,19 +973,30 @@ PHP_FUNCTION( sqlsrv_fetch_object )
 				HashTable* ctor_params_ht = Z_ARRVAL_P(ctor_params_z);
 				num_params = zend_hash_num_elements(ctor_params_ht);
 				params_m = reinterpret_cast<zval***>(sqlsrv_malloc(num_params * sizeof(zval**)));
+				HashPosition pos;
 
-				int i;
-				for (i = 0, zend_hash_internal_pointer_reset(ctor_params_ht); zend_hash_has_more_elements(ctor_params_ht) == SUCCESS; zend_hash_move_forward(ctor_params_ht), ++i) 
+				for (zend_hash_internal_pointer_reset_ex(ctor_params_ht, &pos); ; zend_hash_move_forward_ex(ctor_params_ht, &pos))
 				{
-					HashPosition hpos = static_cast<HashPosition>(i);
-					auto tempPtr = zend_hash_get_current_data_ex(ctor_params_ht, &hpos);
+					auto tempPtr = core::sqlsrv_zend_hash_get_current_data_ex(ctor_params_ht, &pos);
+
+					int type = HASH_KEY_NON_EXISTENT;
+					zend_string *key = NULL;
+					unsigned int key_len = -1;
+					zend_ulong index = -1;
+
+					type = zend_hash_get_current_key_ex(ctor_params_ht, &key, &index, &pos);
+
+					if (HASH_KEY_NON_EXISTENT == type)
+					{
+						break;
+					}
 
 					if( tempPtr == NULL )
 					{
 						throw ss::SSException();
 					}
 
-					*params_m[i] = tempPtr;
+					*params_m[pos] = tempPtr;
 				} //for
 #else
 				HashTable* ctor_params_ht = Z_ARRVAL_P(ctor_params_z);
@@ -1183,9 +1257,7 @@ PHP_FUNCTION( sqlsrv_get_field )
                               &sqlsrv_php_type_out TSRMLS_CC );
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		zval_ptr_dtor(return_value);
-		auto temp = convert_to_zval(sqlsrv_php_type_out, &field_value, field_len);
-		RETVAL_ZVAL(temp, 1, 1);
+		convert_to_zval(sqlsrv_php_type_out, &field_value, field_len, return_value);
 #else
         zval_ptr_dtor( &return_value );
         *return_value_ptr = convert_to_zval( sqlsrv_php_type_out, &field_value, field_len );
@@ -1283,22 +1355,29 @@ PHP_FUNCTION(SQLSRV_SQLTYPE_VARCHAR)
 // script and subsequent sqlsrv_execute calls will use the new values.  Marking them as references "pins" them
 // to their memory location so that the buffer we give to ODBC can be relied on to be there.
 
-void mark_params_by_reference( ss_sqlsrv_stmt* stmt, zval* params_z TSRMLS_DC )
+void mark_params_by_reference(ss_sqlsrv_stmt* stmt, zval* params_z TSRMLS_DC)
 {
-    SQLSRV_ASSERT( stmt->params_z == NULL, "mark_params_by_reference: parameters list shouldn't be present" );
+	SQLSRV_ASSERT(stmt->params_z == NULL, "mark_params_by_reference: parameters list shouldn't be present");
 
-    if( params_z == NULL ) {
-        return;
-    }
+	if (params_z == NULL) {
+		return;
+	}
 
-    HashTable* params_ht = Z_ARRVAL_P( params_z );
-
-    for( zend_hash_internal_pointer_reset( params_ht );
-         zend_hash_has_more_elements( params_ht ) == SUCCESS;
-         zend_hash_move_forward( params_ht )) {
+	HashTable* params_ht = Z_ARRVAL_P(params_z);
+#if PHP_MAJOR_VERSION >= 7
+	uint32_t count = 0;
+	HashPosition pos;
+	for (zend_hash_internal_pointer_reset_ex(params_ht, &pos);;	zend_hash_move_forward_ex(params_ht, &pos))
+#else
+	for (zend_hash_internal_pointer_reset(params_ht);
+	zend_hash_has_more_elements(params_ht) == SUCCESS;
+		zend_hash_move_forward(params_ht))
+#endif
+	{
 
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
+		count++;
 		zend_string *key = NULL;
 		zend_ulong index = -1;
 #else
@@ -1306,31 +1385,36 @@ void mark_params_by_reference( ss_sqlsrv_stmt* stmt, zval* params_z TSRMLS_DC )
 		unsigned int key_len = 0;
 		unsigned long index = -1;
 #endif
-      
-        zval** value_z = NULL;
 
-        // make sure it's an integer index
+		zval** value_z = NULL;
+
+		// make sure it's an integer index
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		int type = zend_hash_get_current_key_ex(params_ht, &key, &index, NULL);
+		int type = zend_hash_get_current_key_ex(params_ht, &key, &index, &pos);
 #else
 		int type = zend_hash_get_current_key_ex(params_ht, &key, &key_len, &index, 0, NULL);
 #endif 
-       
-                
-        CHECK_CUSTOM_ERROR( type != HASH_KEY_IS_LONG, stmt, SS_SQLSRV_ERROR_PARAM_INVALID_INDEX ) {
-            throw ss::SSException();
-        }
 
-		core::sqlsrv_zend_hash_get_current_data(*stmt, params_ht, (void**)&value_z TSRMLS_CC);
-        
-        // This code turns parameters into references.  Since the function declaration cannot 
-        // pass array elements as references (without requiring & in front of each variable),
-        // we have to set the reference in each of the zvals ourselves.  In the event of a 
-        // parameter array (or sub array if you will) being passed in, we set the zval of the 
-        // parameter array's first element.
+		if (HASH_KEY_NON_EXISTENT == type)
+		{
+			break;
+		}
 
-        // if it's a sole variable
+
+		CHECK_CUSTOM_ERROR(type != HASH_KEY_IS_LONG, stmt, SS_SQLSRV_ERROR_PARAM_INVALID_INDEX) {
+			throw ss::SSException();
+		}
+
+		*value_z = core::sqlsrv_zend_hash_get_current_data_ex(params_ht, &pos);
+
+		// This code turns parameters into references.  Since the function declaration cannot 
+		// pass array elements as references (without requiring & in front of each variable),
+		// we have to set the reference in each of the zvals ourselves.  In the event of a 
+		// parameter array (or sub array if you will) being passed in, we set the zval of the 
+		// parameter array's first element.
+
+		// if it's a sole variable
 #if PHP_MAJOR_VERSION >= 7
 		if (Z_TYPE_P(*value_z) != IS_ARRAY) {
 			// print a warning if they didn't send it as a reference
@@ -1355,39 +1439,45 @@ void mark_params_by_reference( ss_sqlsrv_stmt* stmt, zval* params_z TSRMLS_DC )
 			ZVAL_NEW_REF(var, var); // mark it as a reference
 		}
 #else
-        if( Z_TYPE_PP( value_z ) != IS_ARRAY ) {
-            // print a warning if they didn't send it as a reference
-            if( !PZVAL_IS_REF( *value_z ) && Z_REFCOUNT_P( *value_z ) > 1 ) {
-                php_error( E_WARNING, SS_SQLSRV_WARNING_PARAM_VAR_NOT_REF, index + 1 );
-            }
-            Z_SET_ISREF_PP( value_z ); // mark it as a reference
-        }
-        // else mark [0] as a reference
-        else {
+		if (Z_TYPE_PP(value_z) != IS_ARRAY) {
+			// print a warning if they didn't send it as a reference
+			if (!PZVAL_IS_REF(*value_z) && Z_REFCOUNT_P(*value_z) > 1) {
+				php_error(E_WARNING, SS_SQLSRV_WARNING_PARAM_VAR_NOT_REF, index + 1);
+			}
+			Z_SET_ISREF_PP(value_z); // mark it as a reference
+		}
+		// else mark [0] as a reference
+		else {
 
-            zval** var = NULL;
-            int zr = zend_hash_index_find( Z_ARRVAL_PP( value_z ), 0, reinterpret_cast<void**>( &var ));
-            CHECK_CUSTOM_ERROR( zr == FAILURE, stmt, SS_SQLSRV_ERROR_VAR_REQUIRED, index + 1 ) {
-                throw ss::SSException();
-            }
-            // print a warning if they didn't send it as a reference
-            if( !PZVAL_IS_REF( *var ) && Z_REFCOUNT_P( *var ) > 1 ) {
-                php_error( E_WARNING, SS_SQLSRV_WARNING_PARAM_VAR_NOT_REF, index + 1 );
-            }
+			zval** var = NULL;
+			int zr = zend_hash_index_find(Z_ARRVAL_PP(value_z), 0, reinterpret_cast<void**>(&var));
+			CHECK_CUSTOM_ERROR(zr == FAILURE, stmt, SS_SQLSRV_ERROR_VAR_REQUIRED, index + 1) {
+				throw ss::SSException();
+			}
+			// print a warning if they didn't send it as a reference
+			if (!PZVAL_IS_REF(*var) && Z_REFCOUNT_P(*var) > 1) {
+				php_error(E_WARNING, SS_SQLSRV_WARNING_PARAM_VAR_NOT_REF, index + 1);
+			}
 
-            Z_SET_ISREF_PP( var ); // mark it as a reference
-        }
+			Z_SET_ISREF_PP(var); // mark it as a reference
+		}
 #endif
-    }
+	}
 
-    // save our parameters for later.
-#if PHP_MAJOR_VERSION >= 7
-	zval_add_ref(params_z);
+	// save our parameters for later.
+#if PHP_MAJOR_VERSION <= 7
+	add_ref_zval(params_z);
+	//stmt->params_z = params_z;
+	if (count > 0)
+	{
+		stmt->params_z = params_z;
+	}
 #else
     zval_add_ref( &params_z );
+	stmt->params_z = params_z;
 #endif
 
-    stmt->params_z = params_z;
+    
 }
 
 void bind_params( ss_sqlsrv_stmt* stmt TSRMLS_DC )
@@ -1407,9 +1497,16 @@ void bind_params( ss_sqlsrv_stmt* stmt TSRMLS_DC )
 
         HashTable* params_ht = Z_ARRVAL_P( params_z );
 
-        for( zend_hash_internal_pointer_reset( params_ht );
-             zend_hash_has_more_elements( params_ht ) == SUCCESS;
-             zend_hash_move_forward( params_ht )) 
+#if PHP_MAJOR_VERSION >= 7
+		HashPosition pos;
+		for (zend_hash_internal_pointer_reset_ex(params_ht, &pos);
+		;
+		zend_hash_move_forward_ex(params_ht, &pos))
+#else
+		for (zend_hash_internal_pointer_reset(params_ht);
+		zend_hash_has_more_elements(params_ht) == SUCCESS;
+			zend_hash_move_forward(params_ht))
+#endif
 		{
 			//PHP7 Port
 #if PHP_MAJOR_VERSION >=7
@@ -1420,6 +1517,22 @@ void bind_params( ss_sqlsrv_stmt* stmt TSRMLS_DC )
 			unsigned int key_len = 0;
 			unsigned long index = -1;
 #endif
+			// make sure it's an integer index
+			//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+			int type = zend_hash_get_current_key_ex(params_ht, &key, &index, &pos);
+
+			if (HASH_KEY_NON_EXISTENT == type)
+			{
+				break;
+			}
+#else
+			int type = zend_hash_get_current_key_ex(params_ht, &key, &key_len, &index, 0, NULL);
+#endif
+
+			CHECK_CUSTOM_ERROR(type != HASH_KEY_IS_LONG, stmt, SS_SQLSRV_ERROR_PARAM_INVALID_INDEX) {
+				throw ss::SSException();
+			}
             
             zval** param_z = NULL;
             zval* value_z = NULL;
@@ -1433,24 +1546,16 @@ void bind_params( ss_sqlsrv_stmt* stmt TSRMLS_DC )
             SQLSMALLINT decimal_digits = 0;
             SQLSRV_PHPTYPE php_out_type = SQLSRV_PHPTYPE_INVALID;
 
-            // make sure it's an integer index
-			//PHP7 Port
-#if PHP_MAJOR_VERSION >= 7
-			int type = zend_hash_get_current_key_ex(params_ht, &key,  &index, NULL);
-#else
-            int type = zend_hash_get_current_key_ex( params_ht, &key, &key_len, &index, 0, NULL );
-#endif
-                    
-            CHECK_CUSTOM_ERROR( type != HASH_KEY_IS_LONG, stmt, SS_SQLSRV_ERROR_PARAM_INVALID_INDEX ) {
-                throw ss::SSException();
-            }
 
-			core::sqlsrv_zend_hash_get_current_data(*stmt, params_ht, (void**)&param_z TSRMLS_CC);
+
+			
 
             // if it's a parameter array
 #if PHP_MAJOR_VERSION >= 7
+			*param_z = core::sqlsrv_zend_hash_get_current_data_ex(params_ht, &pos);
 			if (Z_TYPE_P(*param_z) == IS_ARRAY) {
 #else
+			core::sqlsrv_zend_hash_get_current_data(*stmt, params_ht, (void**)&param_z TSRMLS_CC);
             if( Z_TYPE_PP( param_z ) == IS_ARRAY ) {
 #endif
 			//PHP7 Port
@@ -1458,7 +1563,7 @@ void bind_params( ss_sqlsrv_stmt* stmt TSRMLS_DC )
 				zval** var = NULL;
 				if (zend_hash_index_find(Z_ARRVAL_P(*param_z), 0) == NULL )
 				{
-					zval_ptr_dtor(params_z);
+					zval_destructor(params_z);
 					throw ss::SSException();
 				}
 #else
@@ -1544,23 +1649,33 @@ PHP_FUNCTION( sqlsrv_cancel )
 }
 
 #if PHP_MAJOR_VERSION >= 7
-void __cdecl sqlsrv_stmt_dtor( zend_resource *rsrc TSRMLS_DC )
+void __cdecl sqlsrv_stmt_dtor(zend_resource *rsrc TSRMLS_DC)
 #else
 void __cdecl sqlsrv_stmt_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
 #endif
 {
 
-    LOG_FUNCTION( "sqlsrv_stmt_dtor" );
-
-    // get the structure
-    ss_sqlsrv_stmt *stmt = static_cast<ss_sqlsrv_stmt*>( rsrc->ptr );
-
+	LOG_FUNCTION("sqlsrv_stmt_dtor");
+	
+	// get the structure
+	ss_sqlsrv_stmt *stmt = static_cast<ss_sqlsrv_stmt*>(rsrc->ptr);
 	//PHP7 Port
-#if PHP_MAJOR_VERSION < 7
+#if PHP_MAJOR_VERSION >= 7
+	bool persistency = true;
+	clean_hashtable((stmt->param_input_strings), persistency);
+	clean_hashtable((stmt->param_streams), persistency);
+	clean_hashtable((stmt->param_datetime_buffers), persistency);
+	clean_hashtable((stmt->output_params), persistency);
+	clean_hashtable((stmt->field_cache), persistency);
 	stmt->~ss_sqlsrv_stmt();
+	sqlsrv_free(stmt, true);
+	sqlsrv_free(rsrc);
+#else
+	stmt->~ss_sqlsrv_stmt();
+	sqlsrv_free(stmt);
 #endif
-    sqlsrv_free( stmt );
-    rsrc->ptr = NULL;
+	
+	rsrc->ptr = NULL;
 }
 
 // sqlsrv_free_stmt( resource $stmt )
@@ -1634,7 +1749,7 @@ PHP_FUNCTION( sqlsrv_free_stmt )
         // verify the resource so we know we're deleting a statement
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		stmt = static_cast<ss_sqlsrv_stmt*>(zend_fetch_resource(Z_RES_P(stmt_r) TSRMLS_CC, ss_sqlsrv_stmt::resource_name, ss_sqlsrv_stmt::descriptor));
+		stmt = static_cast<ss_sqlsrv_stmt*>(ss::zend_fetch_resource(Z_RES_P(stmt_r) TSRMLS_CC, ss_sqlsrv_stmt::resource_name, ss_sqlsrv_stmt::descriptor));
 #else
         stmt = static_cast<ss_sqlsrv_stmt*>( zend_fetch_resource( &stmt_r TSRMLS_CC, -1, ss_sqlsrv_stmt::resource_name, NULL, 
                                                                   1, ss_sqlsrv_stmt::descriptor ));
@@ -1649,7 +1764,8 @@ PHP_FUNCTION( sqlsrv_free_stmt )
         // delete the resource from Zend's master list, which will trigger the statement's destructor
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-        int zr = zend_hash_index_del( &EG( regular_list ), Z_RES_P( stmt_r )->handle);
+        int zr = core::sqlsrv_zend_hash_index_del( &(RESOURCE_TABLE), Z_RES_P( stmt_r )->handle);
+
         if( zr == FAILURE ) 
 		{
             LOG( SEV_ERROR, "Failed to remove stmt resource %1!d!", Z_RES_P( stmt_r )->handle );
@@ -1661,7 +1777,7 @@ PHP_FUNCTION( sqlsrv_free_stmt )
 		}
 #endif
 
-        ZVAL_NULL( stmt_r );
+		null_zval( stmt_r );
 
         RETURN_TRUE;
     
@@ -1723,19 +1839,26 @@ void stmt_option_scrollable:: operator()( sqlsrv_stmt* stmt, stmt_option const* 
 }
 
 namespace {
-
+#if PHP_MAJOR_VERSION >= 7
+	void convert_to_zval(SQLSRV_PHPTYPE sqlsrv_php_type, void** in_val, SQLLEN field_len, zval* out_zval)
+#else
 	zval* convert_to_zval(SQLSRV_PHPTYPE sqlsrv_php_type, void** in_val, SQLLEN field_len)
+#endif
 	{
+#if PHP_MAJOR_VERSION < 7
 		zval* out_zval = NULL;
+#endif
 
 		switch (sqlsrv_php_type) {
 
 		case SQLSRV_PHPTYPE_INT:
 		case SQLSRV_PHPTYPE_FLOAT:
 		{
-			ALLOC_INIT_ZVAL(out_zval);
+#if PHP_MAJOR_VERSION < 7
+			sqlsrv_malloc_zval(&out_zval);
+#endif
 			if (*in_val == NULL) {
-				ZVAL_NULL(out_zval);
+				null_zval(out_zval);
 			}
 			else {
 
@@ -1747,31 +1870,35 @@ namespace {
 				}
 			}
 
+#if PHP_MAJOR_VERSION < 7
 			if (*in_val) {
 				sqlsrv_free(*in_val);
 			}
+#endif
 
 			break;
 		}
-
+		
 		case SQLSRV_PHPTYPE_STRING:
 		{
-			ALLOC_INIT_ZVAL(out_zval);
+#if PHP_MAJOR_VERSION < 7
+			sqlsrv_malloc_zval(&out_zval);
+#endif
 
 			if (*in_val == NULL) {
 
-				ZVAL_NULL(out_zval);
+				null_zval(out_zval);
 			}
 			else {
 #if PHP_MAJOR_VERSION >= 7
-				ZVAL_STRINGL(out_zval, reinterpret_cast<char*>(*in_val), field_len);
+				sqlsrv_malloc_zend_string(out_zval, reinterpret_cast<char*>(*in_val), field_len);
 #else
-				ZVAL_STRINGL(out_zval, reinterpret_cast<char*>(*in_val), field_len, 0 /*duplicate*/);
+				ZVAL_STRINGL(out_zval, reinterpret_cast<char*>(*in_val), field_len, 0 );
 #endif
 			}
 			break;
 		}
-
+	
 		case SQLSRV_PHPTYPE_STREAM:
 		case SQLSRV_PHPTYPE_DATETIME:
 
@@ -1779,8 +1906,10 @@ namespace {
 			break;
 
 		case SQLSRV_PHPTYPE_NULL:
-			ALLOC_INIT_ZVAL(out_zval);
-			ZVAL_NULL(out_zval);
+#if PHP_MAJOR_VERSION < 7
+			sqlsrv_malloc_zval(&out_zval);
+#endif
+			null_zval(out_zval);
 			break;
 
 		default:
@@ -1788,7 +1917,9 @@ namespace {
 			break;
 		}
 
+#if PHP_MAJOR_VERSION < 7
 		return out_zval;
+#endif
 	}
 
 // put in the column size and scale/decimal digits of the sql server type
@@ -2045,11 +2176,10 @@ void determine_stmt_has_rows( ss_sqlsrv_stmt* stmt TSRMLS_DC )
 void fetch_fields_common( __inout ss_sqlsrv_stmt* stmt, int fetch_type, __out zval* return_value, bool allow_empty_field_names 
                           TSRMLS_DC )
 {
-    void* field_value = NULL;
     sqlsrv_phptype sqlsrv_php_type;
     sqlsrv_php_type.typeinfo.type = SQLSRV_PHPTYPE_INVALID;
     SQLSRV_PHPTYPE sqlsrv_php_type_out = SQLSRV_PHPTYPE_INVALID;
-	zval_auto_ptr fields;
+	void* field_value = nullptr;
 
     // make sure that the fetch type is legal
     CHECK_CUSTOM_ERROR(( fetch_type < MIN_SQLSRV_FETCH || fetch_type > MAX_SQLSRV_FETCH ), stmt,  SS_SQLSRV_ERROR_INVALID_FETCH_TYPE, stmt->func() ) 
@@ -2060,11 +2190,13 @@ void fetch_fields_common( __inout ss_sqlsrv_stmt* stmt, int fetch_type, __out zv
     // get the numer of columns in the result set
     SQLSMALLINT num_cols = core::SQLNumResultCols( stmt TSRMLS_CC );
     
+	
+	////////////////////////////////////////////////////////////////////////////////////////
+	// ASSOCIATIVE FETCH
     // if this is the first fetch in a new result set, then get the field names and
     // store them off for successive fetches.
     if(( fetch_type & SQLSRV_FETCH_ASSOC ) && stmt->fetch_field_names == NULL ) 
 	{
-
         SQLSMALLINT field_name_len;
         char field_name_temp[ SS_MAXCOLNAMELEN*2+1 ]; // space added for potential overflow of utf16-utf8 conversion
         sqlsrv_malloc_auto_ptr<sqlsrv_fetch_field_name> field_names( static_cast<sqlsrv_fetch_field_name*>( sqlsrv_malloc( num_cols * sizeof( sqlsrv_fetch_field_name ))) );
@@ -2083,32 +2215,102 @@ void fetch_fields_common( __inout ss_sqlsrv_stmt* stmt, int fetch_type, __out zv
         stmt->fetch_fields_count = num_cols;
         field_names.transferred(); 
     }
-
+	//return;
+	
+	////////////////////////////////////////////////////////////////////////////////////////
 	//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-	ALLOC_INIT_ZVAL(fields);
-    int zr = array_init( fields );
+	int zr = 0;
+    //int zr = array_init(return_value );
 #else
 	MAKE_STD_ZVAL(fields);
 	int zr = array_init(fields);
-#endif
-    CHECK_ZEND_ERROR( zr, stmt, SQLSRV_ERROR_ZEND_HASH ) 
+	CHECK_ZEND_ERROR(zr, stmt, SQLSRV_ERROR_ZEND_HASH)
 	{
-        throw ss::SSException();
-    }
+		throw ss::SSException();
+	}
+#endif
+  
+	
+	/////////////////////////////////////////////////////////////////////////////
+	/////////////////////////////////////////////////////////////////////////////
+#if PHP_MAJOR_VERSION >= 7
+	zval fields;
+	array_init(&fields);
 
-    // get the fields
-    for( int i=0; i< num_cols; ++i ) {
-        
-        // this zval_auto_ptr is never transferred because we rely on its destructor to decrement the reference count
-        // we increment its reference count within each fetch type (below)
-		zval* field;
-      
-        SQLLEN field_len = -1;
+	// get the fields
+	for (int i = 0; i <num_cols; ++i)
+	{
+		zval field;
+		zval field_numeric;
+		SQLLEN field_len = -1;
 
-        core_sqlsrv_get_field( stmt, i, sqlsrv_php_type, true /*prefer string*/, 
-                               &field_value, &field_len, false /*cache_field*/, &sqlsrv_php_type_out TSRMLS_CC ); 
-        field = convert_to_zval( sqlsrv_php_type_out, &field_value, field_len );
+		try
+		{
+			core_sqlsrv_get_field(stmt, i, sqlsrv_php_type, true /*prefer string*/,
+				&(field_value), &field_len, false /*cache_field*/, &sqlsrv_php_type_out TSRMLS_CC);
+
+			if (fetch_type & SQLSRV_FETCH_NUMERIC)
+			{
+				convert_to_zval(sqlsrv_php_type_out, &(field_value), field_len, &field_numeric);
+			}
+
+			if (fetch_type & SQLSRV_FETCH_ASSOC)
+			{
+				convert_to_zval(sqlsrv_php_type_out, &(field_value), field_len, &field);
+			}
+		}
+		catch (core::CoreException&)
+		{
+			sqlsrv_free(field_value);
+			throw;
+		}
+
+		sqlsrv_free(field_value);
+
+		if (fetch_type & SQLSRV_FETCH_NUMERIC)
+		{
+			zr = add_next_index_zval(&fields, &field_numeric);
+			CHECK_ZEND_ERROR(zr, stmt, SQLSRV_ERROR_ZEND_HASH)
+			{
+				throw ss::SSException();
+			}
+		}
+
+		if (fetch_type & SQLSRV_FETCH_ASSOC)
+		{
+			CHECK_CUSTOM_WARNING_AS_ERROR((stmt->fetch_field_names[i].len == 1 && !allow_empty_field_names), stmt,
+				SS_SQLSRV_WARNING_FIELD_NAME_EMPTY)
+			{
+				throw ss::SSException();
+			}
+
+			if (stmt->fetch_field_names[i].len > 1 || allow_empty_field_names)
+			{
+				zr = add_assoc_zval(&fields, stmt->fetch_field_names[i].name, &field);
+
+				CHECK_ZEND_ERROR(zr, stmt, SQLSRV_ERROR_ZEND_HASH)
+				{
+					throw ss::SSException();
+				}
+			}
+		}
+	} //for loop
+
+	*return_value = fields;
+
+#else
+	// get the fields
+	for (int i = 0; i< num_cols; ++i) {
+
+		// this zval_auto_ptr is never transferred because we rely on its destructor to decrement the reference count
+		// we increment its reference count within each fetch type (below)
+		zval_auto_ptr field;
+		SQLLEN field_len = -1;
+
+		core_sqlsrv_get_field(stmt, i, sqlsrv_php_type, true /*prefer string*/,
+			&field_value, &field_len, false /*cache_field*/, &sqlsrv_php_type_out TSRMLS_CC);
+		field = convert_to_zval(sqlsrv_php_type_out, &field_value, field_len);
 
 		if (fetch_type & SQLSRV_FETCH_NUMERIC) {
 
@@ -2116,54 +2318,36 @@ void fetch_fields_common( __inout ss_sqlsrv_stmt* stmt, int fetch_type, __out zv
 			CHECK_ZEND_ERROR(zr, stmt, SQLSRV_ERROR_ZEND_HASH) {
 				throw ss::SSException();
 			}
-			//PHP7 Port
-#if PHP_MAJOR_VERSION >= 7
-			zval_add_ref(field);
-#else
 			zval_add_ref(&field);
-#endif
 		}
 
-        if( fetch_type & SQLSRV_FETCH_ASSOC ) {
-            
-            CHECK_CUSTOM_WARNING_AS_ERROR(( stmt->fetch_field_names[ i ].len == 1 && !allow_empty_field_names ), stmt, 
-					  SS_SQLSRV_WARNING_FIELD_NAME_EMPTY ) {
-                throw ss::SSException();
-            }
+		if (fetch_type & SQLSRV_FETCH_ASSOC) {
 
-            if( stmt->fetch_field_names[ i ].len > 1 || allow_empty_field_names ) 
-			{
-				//PHP7 Port
-#if PHP_MAJOR_VERSION >= 7
+			CHECK_CUSTOM_WARNING_AS_ERROR((stmt->fetch_field_names[i].len == 1 && !allow_empty_field_names), stmt,
+				SS_SQLSRV_WARNING_FIELD_NAME_EMPTY) {
+				throw ss::SSException();
+			}
+
+			if (stmt->fetch_field_names[i].len > 1 || allow_empty_field_names) {
+
 				zr = add_assoc_zval(fields, stmt->fetch_field_names[i].name, field);
-#else
-				zr = add_assoc_zval(fields, stmt->fetch_field_names[i].name, field);
-#endif
-				
-                CHECK_ZEND_ERROR( zr, stmt, SQLSRV_ERROR_ZEND_HASH ) {
-                    throw ss::SSException();
-                }
-				//PHP7 Port
-#if PHP_MAJOR_VERSION >= 7
-				zval_add_ref(field);
-#else
+				CHECK_ZEND_ERROR(zr, stmt, SQLSRV_ERROR_ZEND_HASH) {
+					throw ss::SSException();
+				}
 				zval_add_ref(&field);
+			}
+		}
+	} //for loop
 #endif
-            }
-        }
-    } //for loop
-    
-	  //PHP7 Port
-#if PHP_MAJOR_VERSION >= 7
-	RETVAL_ZVAL(fields, 1, 1);
-	ZVAL_NULL(fields);
-	zval_ptr_dtor(fields);
-#else
+	/////////////////////////////////////////////////////////////////////////////
+	/////////////////////////////////////////////////////////////////////////////
+#if PHP_MAJOR_VERSION < 7
 	*return_value = *fields;
 	ZVAL_NULL(fields);
 	zval_ptr_dtor(&fields);
-#endif
 	fields.transferred();
+#endif
+	
 }
 
 void parse_param_array( ss_sqlsrv_stmt* stmt, __inout zval* param_array, unsigned long index, __out int& direction,
@@ -2196,7 +2380,7 @@ void parse_param_array( ss_sqlsrv_stmt* stmt, __inout zval* param_array, unsigne
 
 	//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-	if ( zend_hash_has_more_elements(param_ht) == FAILURE ||	(var_or_val = zend_hash_get_current_data(param_ht)) == NULL )
+	if ( zend_hash_has_more_elements(param_ht) == FAILURE ||	(var_or_val = core::sqlsrv_zend_hash_get_current_data(param_ht)) == NULL )
 	{
 		THROW_SS_ERROR(stmt, SS_SQLSRV_ERROR_VAR_REQUIRED, index + 1);
 	}
@@ -2210,7 +2394,7 @@ void parse_param_array( ss_sqlsrv_stmt* stmt, __inout zval* param_array, unsigne
     // if the direction is included, then use what they gave, otherwise INPUT is assumed
 	//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-	if (zend_hash_move_forward(param_ht) == SUCCESS && (temp = zend_hash_get_current_data(param_ht)) != NULL &&
+	if (zend_hash_move_forward(param_ht) == SUCCESS && (temp = core::sqlsrv_zend_hash_get_current_data(param_ht)) != NULL &&
 		Z_TYPE_P(temp) != IS_NULL)
 	{
 
@@ -2251,7 +2435,7 @@ void parse_param_array( ss_sqlsrv_stmt* stmt, __inout zval* param_array, unsigne
     // extract the php type and encoding from the 3rd parameter
 	//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-	if (zend_hash_move_forward(param_ht) == SUCCESS && (temp = zend_hash_get_current_data(param_ht)) != NULL &&
+	if (zend_hash_move_forward(param_ht) == SUCCESS && (temp = core::sqlsrv_zend_hash_get_current_data(param_ht)) != NULL &&
 		Z_TYPE_P(temp) != IS_NULL ) 
 	{
 
@@ -2318,7 +2502,7 @@ void parse_param_array( ss_sqlsrv_stmt* stmt, __inout zval* param_array, unsigne
 
 	//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-	if (zend_hash_move_forward(param_ht) == SUCCESS && ( temp = zend_hash_get_current_data(param_ht) ) != NULL &&
+	if (zend_hash_move_forward(param_ht) == SUCCESS && ( temp = core::sqlsrv_zend_hash_get_current_data(param_ht) ) != NULL &&
 		Z_TYPE_P(temp) != IS_NULL ) 
 	{
 
@@ -2472,15 +2656,36 @@ bool is_valid_sqlsrv_sqltype( sqlsrv_sqltype sql_type )
 // of standard encodings created at module initialization time
 bool verify_and_set_encoding( const char* encoding_string, __out sqlsrv_phptype& phptype_encoding TSRMLS_DC )
 {
+#if PHP_MAJOR_VERSION >= 7
+	HashPosition pos;
+	for (zend_hash_internal_pointer_reset_ex(g_ss_encodings_ht, &pos);
+	;
+		zend_hash_move_forward_ex(g_ss_encodings_ht, &pos))
+#else
     for( zend_hash_internal_pointer_reset( g_ss_encodings_ht );
          zend_hash_has_more_elements( g_ss_encodings_ht ) == SUCCESS;
          zend_hash_move_forward( g_ss_encodings_ht ) ) 
+#endif
 	{
+
+#if PHP_MAJOR_VERSION >= 7
+		int type = HASH_KEY_NON_EXISTENT;
+		zend_string *key = NULL;
+		unsigned int key_len = -1;
+		zend_ulong index = -1;
+
+		type = zend_hash_get_current_key_ex(g_ss_encodings_ht, &key, &index, &pos);
+
+		if (HASH_KEY_NON_EXISTENT == type)
+		{
+			break;
+		}
+#endif
 
         sqlsrv_encoding* encoding = NULL;
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		encoding = (sqlsrv_encoding *)zend_hash_get_current_data(g_ss_encodings_ht);
+		encoding = (sqlsrv_encoding *)core::sqlsrv_zend_hash_get_current_data_ex(g_ss_encodings_ht, &pos);
 
 		if (encoding == NULL)
 		{

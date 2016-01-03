@@ -129,33 +129,60 @@ PHP_FUNCTION(sqlsrv_prepare);
 PHP_FUNCTION(sqlsrv_rollback);
 PHP_FUNCTION(sqlsrv_server_info);
 
+#define MAX_CONNECTION_STATEMENTS 4096
+
 struct ss_sqlsrv_conn : sqlsrv_conn
 {
-    HashTable*     stmts;
+#if PHP_MAJOR_VERSION >= 7
+	long stmts[MAX_CONNECTION_STATEMENTS];
+	int stmts_pointer;
+#else
+	HashTable*     stmts;
+#endif
     bool           date_as_string;
     bool           in_transaction;     // flag set when inside a transaction and used for checking validity of tran API calls
+
     
     // static variables used in process_params
     static char* resource_name;        // char because const char forces casting all over the place.  Just easier to leave it char here.
     static int descriptor;
+	bool persistent_;
 
     // initialize with default values
-    ss_sqlsrv_conn( SQLHANDLE h, error_callback e, void* drv TSRMLS_DC ) : 
+    ss_sqlsrv_conn( SQLHANDLE h, error_callback e, void* drv) : 
         sqlsrv_conn( h, e, drv, SQLSRV_ENCODING_SYSTEM TSRMLS_CC ),
-        stmts( NULL ),
+#if PHP_MAJOR_VERSION >= 7
+		stmts_pointer{ 0 },
+#else
+		stmts(NULL),
+#endif
         date_as_string( false ),
         in_transaction( false )
     {
     }
+
+	int add_statement_handle(long stmt_res_handle)
+	{
+		int next_index = -1;
+#if PHP_MAJOR_VERSION >= 7
+		next_index = stmts_pointer;
+		stmts[next_index] = stmt_res_handle;
+		stmts_pointer++;
+#else
+		next_index = zend_hash_next_free_element(conn->stmts);
+		core::sqlsrv_zend_hash_index_update(*conn, conn->stmts, next_index, &stmt_res_handle, sizeof(long));
+#endif
+		return next_index;
+	}
 };
 
 // resource destructor
 #if PHP_MAJOR_VERSION >= 7
-void __cdecl sqlsrv_conn_dtor(zend_resource *rsrc TSRMLS_DC);
+void __cdecl sqlsrv_conn_dtor(zend_resource *rsrc 
+	);
 #else
 void __cdecl sqlsrv_conn_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC);
 #endif
-
 
 //*********************************************************************************************************************************
 // Statement
@@ -229,11 +256,6 @@ PHP_FUNCTION(sqlsrv_num_rows);
 PHP_FUNCTION(sqlsrv_rows_affected);
 PHP_FUNCTION(sqlsrv_send_stream_data);
 
-// resource destructor
-
-
-// resource destructor
-
 //PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
 void __cdecl sqlsrv_stmt_dtor(zend_resource *rsrc TSRMLS_DC);
@@ -278,11 +300,19 @@ PHP_FUNCTION(SQLSRV_PHPTYPE_STRING);
 extern "C" {
 
 // request level variables
-ZEND_BEGIN_MODULE_GLOBALS(sqlsrv)
+	ZEND_BEGIN_MODULE_GLOBALS(sqlsrv)
 
-// global objects for errors and warnings.  These are returned by sqlsrv_errors.
+		// global objects for errors and warnings.  These are returned by sqlsrv_errors.
+#if PHP_MAJOR_VERSION >= 7
+ErrorManager errors;
+#else
 zval* errors;
 zval* warnings;
+#endif
+
+#if PHP_MAJOR_VERSION >= 7
+HashTable resources;
+#endif
 
 // flags for error handling and logging (set via sqlsrv_configure or php.ini)
 long log_severity;
@@ -302,6 +332,30 @@ ZEND_EXTERN_MODULE_GLOBALS(sqlsrv);
 #define SQLSRV_G(v) TSRMG(sqlsrv_globals_id, zend_sqlsrv_globals *, v)
 #else
 #define SQLSRV_G(v) sqlsrv_globals.v
+#endif
+
+//*********************************************************************************************************************************
+// Resource table
+//*********************************************************************************************************************************
+#if PHP_MAJOR_VERSION >= 7
+
+#define RESOURCE_TABLE_CUSTOM 1 // Are we using Zend regular_list or persistent_list or own custom one
+#define RESOURCE_TABLE_PERSISTENCY 0 // Zend memory or CRT memory
+
+#define RESOURCE_TABLE_INITIAL_SIZE 256
+
+// When I tried different custom static data structures I was unable to return resources to callers in php 
+// such as sqlsrv_connect and sqlsrv_prepare
+#if RESOURCE_TABLE_CUSTOM	
+#define RESOURCE_TABLE (SQLSRV_G(resources))
+#else
+#if RESOURCE_TABLE_PERSISTENCY 
+#define  RESOURCE_TABLE EG(persistent_list)
+#else				
+#define  RESOURCE_TABLE EG(regular_list)
+#endif
+#endif		
+
 #endif
 
 // INI settings and constants
@@ -406,6 +460,9 @@ void __cdecl sqlsrv_error_dtor( zend_rsrc_list_entry *rsrc TSRMLS_DC );
 // release current error lists and set to NULL
 inline void reset_errors( TSRMLS_D )
 {
+#if PHP_MAJOR_VERSION >= 7
+	SQLSRV_G(errors).reset();
+#else
 	if (Z_TYPE_P(SQLSRV_G(errors)) != IS_ARRAY && Z_TYPE_P(SQLSRV_G(errors)) != IS_NULL)
 	{
 		DIE("sqlsrv_errors contains an invalid type");
@@ -414,29 +471,16 @@ inline void reset_errors( TSRMLS_D )
 		DIE("sqlsrv_warnings contains an invalid type");
 	}
 
-#if PHP_MAJOR_VERSION >= 7
-	if (Z_TYPE_P(SQLSRV_G(errors)) == IS_ARRAY) 
-	{
-		zend_hash_destroy(Z_ARRVAL_P(SQLSRV_G(errors)));
-		FREE_HASHTABLE(Z_ARRVAL_P(SQLSRV_G(errors)));
-	}
-	if (Z_TYPE_P(SQLSRV_G(warnings)) == IS_ARRAY) {
-		zend_hash_destroy(Z_ARRVAL_P(SQLSRV_G(warnings)));
-		FREE_HASHTABLE(Z_ARRVAL_P(SQLSRV_G(warnings)));
-	}
-#else
 	if (Z_TYPE_P(SQLSRV_G(errors)) == IS_ARRAY) {
-		zend_hash_destroy(Z_ARRVAL_P(SQLSRV_G(errors)));
-		FREE_HASHTABLE(Z_ARRVAL_P(SQLSRV_G(errors)));
+		clean_hashtable(Z_ARRVAL_P(SQLSRV_G(errors)));
 	}
 	if (Z_TYPE_P(SQLSRV_G(warnings)) == IS_ARRAY) {
-		zend_hash_destroy(Z_ARRVAL_P(SQLSRV_G(warnings)));
-		FREE_HASHTABLE(Z_ARRVAL_P(SQLSRV_G(warnings)));
+		clean_hashtable(Z_ARRVAL_P(SQLSRV_G(warnings)));
 	}
-#endif
 
-	ZVAL_NULL(SQLSRV_G(errors));
-	ZVAL_NULL(SQLSRV_G(warnings));
+	null_zval(SQLSRV_G(errors));
+	null_zval(SQLSRV_G(warnings));
+#endif
 }
 
 #define THROW_SS_ERROR( ctx, error_code, ... ) \
@@ -489,6 +533,11 @@ public:
    SQLSRV_G( current_subsystem ) = current_log_subsystem; \
    LOG( SEV_NOTICE, "%1!s!: entering", _FN_ ); \
    CheckMemory _check_memory_;
+
+#define LOG_FUNCTION_EXIT( function_name ) \
+   const char* _FNEXIT_ = function_name; \
+   SQLSRV_G( current_subsystem ) = current_log_subsystem; \
+   LOG( SEV_NOTICE, "%1!s!: exiting", _FNEXIT_ ); 
 
 #define SET_FUNCTION_NAME( context ) \
 { \
@@ -545,7 +594,6 @@ inline H* process_params( INTERNAL_FUNCTION_PARAMETERS, char const* param_spec, 
 	SQLSRV_UNUSED(return_value_ptr);
 	SQLSRV_UNUSED(return_value);
 #endif
-    
 
     zval* rsrc;
     H* h;
@@ -589,7 +637,7 @@ inline H* process_params( INTERNAL_FUNCTION_PARAMETERS, char const* param_spec, 
         int result = SUCCESS;
         
         // dummy context to pass to the error handler
-        sqlsrv_context error_ctx( 0, ss_error_handler, NULL );;
+        sqlsrv_context error_ctx( 0, ss_error_handler, NULL );
         error_ctx.set_func( calling_func );
 
         switch( param_count ) {
@@ -642,7 +690,7 @@ inline H* process_params( INTERNAL_FUNCTION_PARAMETERS, char const* param_spec, 
         // get the resource registered 
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		h = static_cast<H*>(zend_fetch_resource(Z_RES_P(rsrc) TSRMLS_CC, H::resource_name, H::descriptor));
+		h = static_cast<H*>(ss::zend_fetch_resource(Z_RES_P(rsrc) TSRMLS_CC, H::resource_name, H::descriptor));
 #else
         h = static_cast<H*>( zend_fetch_resource( &rsrc TSRMLS_CC, -1, H::resource_name, NULL, 1, H::descriptor ));
 #endif
@@ -682,16 +730,54 @@ namespace ss {
 
 	//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
+	inline int zend_register_list_destructors_ex(rsrc_dtor_func_t ld, rsrc_dtor_func_t pld, const char *type_name, int module_number)
+	{
+		return ::zend_register_list_destructors_ex(ld, pld, type_name, module_number);
+	}
+
+	inline void *zend_fetch_resource(zend_resource *res, const char *resource_type_name, int resource_type)
+	{
+		if (resource_type == res->type) 
+		{
+			return res->ptr;
+		}
+
+		if (resource_type_name) 
+		{
+			const char *space;
+			const char *class_name = get_active_class_name(&space);
+			zend_error(E_WARNING, "%s%s%s(): supplied resource is not a valid %s resource", class_name, space, get_active_function_name(), resource_type_name);
+		}
+
+		return NULL;
+	}
+
 	inline zend_resource* zend_register_resource( void* rsrc_pointer, int rsrc_type, char* rsrc_name)
 	{
-		auto ret = ::zend_register_resource(rsrc_pointer, rsrc_type);
+		zval* zv = NULL;
+		int index = -1;
+		zval zv_res;
 
-		if (ret == NULL)
+		index = zend_hash_next_free_element(&RESOURCE_TABLE);
+		if (index == 0)
+		{
+			index = 1;
+		}
+		
+		sqlsrv_malloc_resource(&zv_res, index, rsrc_pointer, rsrc_type, RESOURCE_TABLE_PERSISTENCY ? true : false);
+
+		zv = zend_hash_index_add_new(&RESOURCE_TABLE, index, &zv_res);
+
+		// 666 make it non ref counted to avoid to be cleaned by i_free_compiled_variables when it clears CV table
+		// this work around also causes a mem leak at the moment
+		make_zval_non_refcounted(zv);
+		
+		if (zv == NULL)
 		{
 			throw ss::SSException();
 		}
-
-		return ret;
+		
+		return Z_RES_P(zv);
 	}
 #else
 	inline void zend_register_resource(__out zval* rsrc_result, void* rsrc_pointer, int rsrc_type, char* rsrc_name)

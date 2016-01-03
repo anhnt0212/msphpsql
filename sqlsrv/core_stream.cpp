@@ -33,7 +33,7 @@ int sqlsrv_stream_close( php_stream* stream, int /*close_handle*/ TSRMLS_DC )
     php_stream_free( stream, PHP_STREAM_FREE_RELEASE_STREAM );
 
     // NULL out the stream zval and delete our reference count to it.
-    ZVAL_NULL( ss->stmt->active_stream );
+	null_zval( ss->stmt->active_stream );
 
     // there is no active stream
     ss->stmt->active_stream = NULL;

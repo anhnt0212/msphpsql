@@ -16,6 +16,8 @@
 //  IN THE SOFTWARE.
 //---------------------------------------------------------------------------------------------------------------------------------
 
+
+
 #include "php_sqlsrv.h"
 ZEND_GET_MODULE(g_sqlsrv)
 
@@ -243,6 +245,51 @@ zend_module_entry g_sqlsrv_module_entry =
     STANDARD_MODULE_PROPERTIES_EX
 };
 
+#if PHP_MAJOR_VERSION >= 7
+void __cdecl sqlsrv_resource_list_dtor(zval* val)
+{
+#if RESOURCE_TABLE_CUSTOM
+	zend_resource* resource = Z_RES_P(val);
+	if (resource)
+	{
+		if (resource->type == ss_sqlsrv_conn::descriptor)
+		{
+			sqlsrv_conn_dtor(resource);
+		}
+		else if (resource->type == ss_sqlsrv_stmt::descriptor)
+		{
+			sqlsrv_stmt_dtor(resource);
+		}
+	}
+#endif
+}
+
+// Called in MSHUTDOWN to clean all conn and stmt resources we have used
+// Will clear resource in sqlsrv_close not called
+void sqlsrv_close_resource_list()
+{
+#if RESOURCE_TABLE_CUSTOM
+	HashTable* resources = &RESOURCE_TABLE;
+	uint32_t count = resources->nNumOfElements;
+
+	// Delete the entries, that will also call the destructors in reverse order
+	// We first want to clear stmts then the connection 
+	// Otherwise first invalidating conn handle is invalidating statement handles 
+	// leading to access violations
+	for (int i = 1 ; i <= count; i--)
+	{
+		// Delete only each connection 
+		// Conn dtors will close the statements
+		if (resources->arData[i].val.value.res->type == ss_sqlsrv_conn::descriptor)
+		{
+			core::sqlsrv_zend_hash_index_del(resources, resources->arData[i].val.value.res->handle);
+		}
+	}
+
+#endif
+}
+#endif
+
 // Module initialization
 // This function is called once per execution of the Zend engine
 // We use it to:
@@ -252,33 +299,26 @@ zend_module_entry g_sqlsrv_module_entry =
 // 3) Allocate the environment handles for ODBC connections (1 for non pooled
 // connections and 1 for pooled connections)
 // 4) Register our INI entries.  See MSDN or php_sqlsrv.h for our supported INI entries
-
 PHP_MINIT_FUNCTION(sqlsrv)
 {
-    SQLSRV_UNUSED( type );
-
-	///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	//PHP7 Port
-#if PHP_MAJOR_VERSION >= 7
-	// Currently not supporting using Zend Manager
-	// Therefore don`t initialise the module if USE_ZEND_ALLOC
-	// environment variable is not there or if its value is not zero
-	char *tmp = getenv("USE_ZEND_ALLOC");
-	bool allowModuleToStart = true;
-	if (tmp && zend_atoi(tmp, strlen(tmp)))
-	{
-		allowModuleToStart = false;
-	}
-
-	if (allowModuleToStart == false)
-	{
-		php_error(E_ERROR, "Currently not supporting Zend memory manager, please set USE_ZEND_ALLOC environment variable to 0");
-		return FAILURE;
-	}
+#if _DEBUG && SQLSRV_MEM_DEBUG && SQLSRV_HOOK_CRT_MALLOC
+	hook_crt_malloc();
 #endif
-	///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+	
+    SQLSRV_UNUSED( type );
     
     core_sqlsrv_register_logger( ss_sqlsrv_log );
+
+	LOG_FUNCTION("PHP_MINIT_FUNCTION for php_sqlsrv");
+
+#if PHP_MAJOR_VERSION >= 7
+#if RESOURCE_TABLE_CUSTOM
+	//resource_table = sqlsrv_malloc_hashtable(RESOURCE_TABLE, RESOURCE_TABLE_PERSISTENCY ? true : false);
+	zend_hash_init(&(RESOURCE_TABLE), RESOURCE_TABLE_INITIAL_SIZE, NULL ,  sqlsrv_resource_list_dtor , RESOURCE_TABLE_PERSISTENCY ? true : false);
+	//mark_hashtable_as_initialised(&(RESOURCE_TABLE));
+#endif
+#endif
 
     // our global variables are initialized in the RINIT function
 #if defined(ZTS)
@@ -294,7 +334,7 @@ PHP_MINIT_FUNCTION(sqlsrv)
 
     REGISTER_INI_ENTRIES();
 
-    LOG_FUNCTION( "PHP_MINIT_FUNCTION for php_sqlsrv" );
+    
 
     REGISTER_LONG_CONSTANT( "SQLSRV_ERR_ERRORS",   SQLSRV_ERR_ERRORS, CONST_PERSISTENT | CONST_CS );
     REGISTER_LONG_CONSTANT( "SQLSRV_ERR_WARNINGS", SQLSRV_ERR_WARNINGS, CONST_PERSISTENT | CONST_CS );
@@ -313,8 +353,12 @@ PHP_MINIT_FUNCTION(sqlsrv)
     REGISTER_LONG_CONSTANT( "SQLSRV_LOG_SEVERITY_ALL", -1, CONST_PERSISTENT | CONST_CS ); // -1 so that all the bits are set
 
     // register connection resource
-	ss_sqlsrv_conn::descriptor = zend_register_list_destructors_ex(sqlsrv_conn_dtor, NULL, "SQL Server Connection", module_number);
-	
+	// sqlsrv_conn_dtor
+#if PHP_MAJOR_VERSION >= 7
+	ss_sqlsrv_conn::descriptor = ss::zend_register_list_destructors_ex(NULL, NULL, "SQL Server Connection", module_number);
+#else
+	ss_sqlsrv_conn::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_conn_dtor, NULL, "SQL Server Connection", module_number);
+#endif
 
     if( ss_sqlsrv_conn::descriptor == FAILURE ) {
         LOG( SEV_ERROR, "%1!s!: connection resource registration failed", _FN_ );
@@ -322,7 +366,12 @@ PHP_MINIT_FUNCTION(sqlsrv)
     }
     
     // register statement resources
-    ss_sqlsrv_stmt::descriptor = zend_register_list_destructors_ex( sqlsrv_stmt_dtor, NULL, "SQL Server Statement", module_number );
+	// sqlsrv_stmt_dtor
+#if PHP_MAJOR_VERSION >= 7
+	ss_sqlsrv_stmt::descriptor = ss::zend_register_list_destructors_ex(NULL, NULL, "SQL Server Statement", module_number);
+#else
+    ss_sqlsrv_stmt::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_stmt_dtor, NULL, "SQL Server Statement", module_number );
+#endif
 
     if( ss_sqlsrv_stmt::descriptor == FAILURE ) {
         LOG( SEV_ERROR, "%1!s!: statement resource regisration failed", _FN_ );
@@ -419,19 +468,19 @@ PHP_MINIT_FUNCTION(sqlsrv)
     REGISTER_STRING_CONSTANT( "SQLSRV_CURSOR_DYNAMIC", "dynamic", CONST_PERSISTENT | CONST_CS );
     REGISTER_STRING_CONSTANT( "SQLSRV_CURSOR_KEYSET",  "keyset", CONST_PERSISTENT | CONST_CS );
     REGISTER_STRING_CONSTANT( "SQLSRV_CURSOR_CLIENT_BUFFERED",  "buffered", CONST_PERSISTENT | CONST_CS );
+	bool hash_tables_persistency = true;
 
     try {
 
         // initialize list of warnings to ignore
-#if PHP_MAJOR_VERSION >= 7
-		g_ss_warnings_to_ignore_ht = reinterpret_cast<HashTable*>(malloc(sizeof(HashTable)));
-#else
-        g_ss_warnings_to_ignore_ht = reinterpret_cast<HashTable*>( pemalloc( sizeof( HashTable ), 1 ));
-#endif
+		
+		
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		::zend_hash_init(g_ss_warnings_to_ignore_ht, 6, NULL, NULL, 1);
+		sqlsrv_malloc_hashtable(&g_ss_warnings_to_ignore_ht, hash_tables_persistency);
+		core::sqlsrv_zend_hash_init(g_ss_warnings_to_ignore_ht, 6, NULL, NULL, 1);
 #else
+		g_ss_warnings_to_ignore_ht = reinterpret_cast<HashTable*>(pemalloc(sizeof(HashTable), 1));
         int zr = ::zend_hash_init( g_ss_warnings_to_ignore_ht, 6, NULL, NULL, 1 );
         if( zr == FAILURE ) {
             throw ss::SSException();
@@ -447,12 +496,12 @@ PHP_MINIT_FUNCTION(sqlsrv)
        
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		auto zr = zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, (zval *)&error_to_ignore);
+		auto* zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, (zval *)&error_to_ignore);
 		if (zr == NULL) {
 			throw ss::SSException();
 		}
 #else
-		zr = zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, &error_to_ignore, sizeof(sqlsrv_error_const), NULL);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, &error_to_ignore, sizeof(sqlsrv_error_const), NULL);
 		if (zr == FAILURE) {
 			throw ss::SSException();
 		}
@@ -467,12 +516,12 @@ PHP_MINIT_FUNCTION(sqlsrv)
 
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		zr = zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, (zval *)&error_to_ignore);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, (zval *)&error_to_ignore);
 		if (zr == NULL) {
 			throw ss::SSException();
 		}
 #else
-		zr = zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, &error_to_ignore, sizeof(sqlsrv_error_const), NULL);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, &error_to_ignore, sizeof(sqlsrv_error_const), NULL);
 		if (zr == FAILURE) {
 			throw ss::SSException();
 		}
@@ -487,12 +536,12 @@ PHP_MINIT_FUNCTION(sqlsrv)
 
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		zr = zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, (zval *)&error_to_ignore);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, (zval *)&error_to_ignore);
 		if (zr == NULL) {
 			throw ss::SSException();
 		}
 #else
-		zr = zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, &error_to_ignore, sizeof(sqlsrv_error_const), NULL);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, &error_to_ignore, sizeof(sqlsrv_error_const), NULL);
 		if (zr == FAILURE) {
 			throw ss::SSException();
 		}
@@ -507,12 +556,12 @@ PHP_MINIT_FUNCTION(sqlsrv)
 
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		zr = zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, (zval *)&error_to_ignore);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, (zval *)&error_to_ignore);
 		if (zr == NULL) {
 			throw ss::SSException();
 		}
 #else
-		zr = zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, &error_to_ignore, sizeof(sqlsrv_error_const), NULL);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, &error_to_ignore, sizeof(sqlsrv_error_const), NULL);
 		if (zr == FAILURE) {
 			throw ss::SSException();
 		}
@@ -525,12 +574,12 @@ PHP_MINIT_FUNCTION(sqlsrv)
         error_to_ignore.format = false;
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		zr = zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, (zval *)&error_to_ignore);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, (zval *)&error_to_ignore);
 		if (zr == NULL) {
 			throw ss::SSException();
 		}
 #else
-		zr = zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, &error_to_ignore, sizeof(sqlsrv_error_const), NULL);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, &error_to_ignore, sizeof(sqlsrv_error_const), NULL);
 		if (zr == FAILURE) {
 			throw ss::SSException();
 		}
@@ -543,12 +592,12 @@ PHP_MINIT_FUNCTION(sqlsrv)
         error_to_ignore.format = false;
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		zr = zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, (zval *)&error_to_ignore);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, (zval *)&error_to_ignore);
 		if (zr == NULL) {
 			throw ss::SSException();
 		}
 #else
-		zr = zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, &error_to_ignore, sizeof(sqlsrv_error_const), NULL);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, &error_to_ignore, sizeof(sqlsrv_error_const), NULL);
 		if (zr == FAILURE) {
 			throw ss::SSException();
 		}
@@ -560,12 +609,12 @@ PHP_MINIT_FUNCTION(sqlsrv)
 		error_to_ignore.format = false;
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		zr = zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, (zval *) &error_to_ignore);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, (zval *) &error_to_ignore);
 		if (zr == NULL) {
 			throw ss::SSException();
 		}
 #else
-		zr = zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, &error_to_ignore, sizeof(sqlsrv_error_const), NULL);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_warnings_to_ignore_ht, &error_to_ignore, sizeof(sqlsrv_error_const), NULL);
 		if (zr == FAILURE) {
 			throw ss::SSException();
 		}
@@ -581,15 +630,13 @@ PHP_MINIT_FUNCTION(sqlsrv)
      try {
     
         // supported encodings
-#if PHP_MAJOR_VERSION >= 7
-		 g_ss_encodings_ht = reinterpret_cast<HashTable*>(malloc(sizeof(HashTable)));
-#else
-		 g_ss_encodings_ht = reinterpret_cast<HashTable*>(pemalloc(sizeof(HashTable), 1));
-#endif
+		
 		 //PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		zend_hash_init(g_ss_encodings_ht, 3, NULL /*use standard hash function*/, NULL /*no resource destructor*/, 1 /*persistent*/);
+		sqlsrv_malloc_hashtable(&g_ss_encodings_ht, hash_tables_persistency);
+		core::sqlsrv_zend_hash_init(g_ss_encodings_ht, 3, NULL /*use standard hash function*/, NULL /*no resource destructor*/, 1 /*persistent*/);
 #else
+		g_ss_encodings_ht = reinterpret_cast<HashTable*>(pemalloc(sizeof(HashTable), 1));
 		int zr = zend_hash_init(g_ss_encodings_ht, 3, NULL /*use standard hash function*/, NULL /*no resource destructor*/, 1 /*persistent*/);
 		if (zr == FAILURE) {
 			throw ss::SSException();
@@ -600,12 +647,12 @@ PHP_MINIT_FUNCTION(sqlsrv)
         sqlsrv_encoding sql_enc_char( "char", SQLSRV_ENCODING_CHAR );
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		auto zr = zend_hash_next_index_insert(g_ss_encodings_ht, (zval *)&sql_enc_char);
+		auto zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_encodings_ht, (zval *)&sql_enc_char);
 		if (zr == NULL) {
 			throw ss::SSException();
 		}
 #else
-		zr = zend_hash_next_index_insert(g_ss_encodings_ht, &sql_enc_char, sizeof(sqlsrv_encoding), NULL /*no pointer to the new value necessasry*/);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_encodings_ht, &sql_enc_char, sizeof(sqlsrv_encoding), NULL /*no pointer to the new value necessasry*/);
 		if (zr == FAILURE) {
 			throw ss::SSException();
 		}
@@ -615,12 +662,12 @@ PHP_MINIT_FUNCTION(sqlsrv)
         sqlsrv_encoding sql_enc_bin( "binary", SQLSRV_ENCODING_BINARY, true );
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		zr = zend_hash_next_index_insert(g_ss_encodings_ht, (zval *)&sql_enc_bin);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_encodings_ht, (zval *)&sql_enc_bin);
 		if (zr == NULL) {
 			throw ss::SSException();
 		}
 #else
-		zr = zend_hash_next_index_insert(g_ss_encodings_ht, &sql_enc_bin, sizeof(sqlsrv_encoding), NULL  /*no pointer to the new value necessasry*/);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_encodings_ht, &sql_enc_bin, sizeof(sqlsrv_encoding), NULL  /*no pointer to the new value necessasry*/);
 		if (zr == FAILURE) {
 			throw ss::SSException();
 		}
@@ -630,12 +677,12 @@ PHP_MINIT_FUNCTION(sqlsrv)
         sqlsrv_encoding sql_enc_utf8( "utf-8", CP_UTF8 );
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		zr = zend_hash_next_index_insert(g_ss_encodings_ht, (zval *)&sql_enc_utf8);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_encodings_ht, (zval *)&sql_enc_utf8);
 		if (zr == NULL) {
 			throw ss::SSException();
 		}
 #else
-		zr = zend_hash_next_index_insert(g_ss_encodings_ht, &sql_enc_utf8, sizeof(sqlsrv_encoding), NULL  /*no pointer to the new value necessasry*/);
+		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_encodings_ht, &sql_enc_utf8, sizeof(sqlsrv_encoding), NULL  /*no pointer to the new value necessasry*/);
 		if (zr == FAILURE) {
 			throw ss::SSException();
 		}
@@ -649,22 +696,19 @@ PHP_MINIT_FUNCTION(sqlsrv)
     }
 
     // initialize list of sqlsrv errors
-#if PHP_MAJOR_VERSION >= 7
-	g_ss_errors_ht = reinterpret_cast<HashTable*>(malloc(sizeof(HashTable))); // Seems like fixing the problem during freeing
-																		      // Actually same thin with pemalloc with persistency flag on...
-#else
-    g_ss_errors_ht = reinterpret_cast<HashTable*>( pemalloc( sizeof( HashTable ), 1 ));
-#endif
+	
 	
 	//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
+	sqlsrv_malloc_hashtable( &g_ss_errors_ht, hash_tables_persistency);
 	if (g_ss_errors_ht == NULL)
 	{
 		LOG(SEV_ERROR, "%1!s!: Failed to initialize the sqlsrv errors hashtable.", _FN_);
 		return FAILURE;
 	}
-	::zend_hash_init(g_ss_errors_ht, 50, NULL, NULL, 1);
+	core::sqlsrv_zend_hash_init(g_ss_errors_ht, 50, NULL, persistent_zval_with_res_dtor, 1);
 #else
+	g_ss_errors_ht = reinterpret_cast<HashTable*>(pemalloc(sizeof(HashTable), 1));
 	int zr = ::zend_hash_init(g_ss_errors_ht, 50, NULL, NULL, 1);
 	if (zr == FAILURE) 
 	{
@@ -679,7 +723,10 @@ PHP_MINIT_FUNCTION(sqlsrv)
         
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		auto zr = ::zend_hash_index_update(g_ss_errors_ht, (zend_ulong)SS_ERRORS[i].error_code, (zval *)&(SS_ERRORS[i].sqlsrv_error));
+		zval temp;
+		int res_index = SS_ERRORS[i].error_code - 1;
+		ZVAL_NEW_PERSISTENT_RES(&temp, g_ss_errors_ht->nNextFreeElement, &(SS_ERRORS[i].sqlsrv_error), res_index);
+		auto zr = core::sqlsrv_zend_hash_index_update(g_ss_errors_ht, (zend_ulong)SS_ERRORS[i].error_code, &temp);
 		if (zr == NULL) 
 		{
 			LOG(SEV_ERROR, "%1!s!: Failed to insert data into sqlsrv errors hashtable.", _FN_);
@@ -717,7 +764,7 @@ PHP_MINIT_FUNCTION(sqlsrv)
         LOG( SEV_ERROR, "PHP_RINIT: Unknown exception caught." );
         return FAILURE;
     }
-
+	LOG_FUNCTION_EXIT("PHP_MINIT_FUNCTION for php_sqlsrv");
     return SUCCESS;
 }
 
@@ -729,27 +776,28 @@ PHP_MINIT_FUNCTION(sqlsrv)
 
 PHP_MSHUTDOWN_FUNCTION(sqlsrv)
 {
+	LOG_FUNCTION("PHP_MSHUTDOWN_FUNCTION for php_sqlsrv");
     SQLSRV_UNUSED( type );
     
     UNREGISTER_INI_ENTRIES();
-
+	
     // clean up the list of sqlsrv errors
-    zend_hash_destroy( g_ss_errors_ht );
-	pefree( g_ss_errors_ht, 1 /*persistent*/ );
+	bool hash_tables_persistency = true;
+	clean_hashtable(g_ss_errors_ht, hash_tables_persistency);
+	clean_hashtable(g_ss_warnings_to_ignore_ht, hash_tables_persistency);
+	clean_hashtable(g_ss_encodings_ht, hash_tables_persistency);
 
-    zend_hash_destroy( g_ss_warnings_to_ignore_ht );
-	pefree( g_ss_warnings_to_ignore_ht, 1 );
-    
-    zend_hash_destroy( g_ss_encodings_ht );
-    pefree( g_ss_encodings_ht, 1 );
-
+#if PHP_MAJOR_VERSION >= 7
+	sqlsrv_close_resource_list();
+#endif
+	
     core_sqlsrv_mshutdown( *g_henv_cp, *g_henv_ncp );
 
     if( php_unregister_url_stream_wrapper( SQLSRV_STREAM_WRAPPER TSRMLS_CC ) == FAILURE ) 
 	{
         return FAILURE;
     }
-
+	LOG_FUNCTION_EXIT("PHP_MSHUTDOWN_FUNCTION for php_sqlsrv");
     return SUCCESS;
 }
 
@@ -764,24 +812,20 @@ PHP_MSHUTDOWN_FUNCTION(sqlsrv)
 
 PHP_RINIT_FUNCTION(sqlsrv)
 {
+	LOG_FUNCTION("PHP_RINIT for php_sqlsrv");
     SQLSRV_UNUSED( module_number );
     SQLSRV_UNUSED( type );
    
     SQLSRV_G( warnings_return_as_errors ) = true;
 	//PHP7 Port
-#if PHP_MAJOR_VERSION >= 7
-	ALLOC_INIT_ZVAL(SQLSRV_G(errors));
-	ALLOC_INIT_ZVAL(SQLSRV_G(warnings));
-	array_init(SQLSRV_G(errors));
-	array_init(SQLSRV_G(warnings));
-#else
+#if PHP_MAJOR_VERSION < 7
 	ALLOC_INIT_ZVAL(SQLSRV_G(errors));
 	Z_SET_ISREF_P(SQLSRV_G(errors));
 	ALLOC_INIT_ZVAL(SQLSRV_G(warnings));
 	Z_SET_ISREF_P(SQLSRV_G(warnings));
 #endif
    
-    LOG_FUNCTION( "PHP_RINIT for php_sqlsrv" );
+   
 
     // read INI settings
     SQLSRV_G( warnings_return_as_errors ) = INI_BOOL( INI_PREFIX INI_WARNINGS_RETURN_AS_ERRORS );
@@ -799,6 +843,7 @@ PHP_RINIT_FUNCTION(sqlsrv)
 #if PHP_MAJOR_VERSION < 7 
 	full_mem_check(MEMCHECK_SILENT);
 #endif
+	LOG_FUNCTION_EXIT("PHP_RINIT for php_sqlsrv");
     return SUCCESS;
 }
 
@@ -809,17 +854,14 @@ PHP_RINIT_FUNCTION(sqlsrv)
 
 PHP_RSHUTDOWN_FUNCTION(sqlsrv)
 {
+	LOG_FUNCTION("PHP_RSHUTDOWN for php_sqlsrv");
     SQLSRV_UNUSED( module_number );
     SQLSRV_UNUSED( type );
 
-    LOG_FUNCTION( "PHP_RSHUTDOWN for php_sqlsrv" );
     reset_errors( TSRMLS_C );
 
 	//PHP7 Port
-#if PHP_MAJOR_VERSION >= 7
-	zval_ptr_dtor(SQLSRV_G(errors));
-	zval_ptr_dtor(SQLSRV_G(warnings));
-#else
+#if PHP_MAJOR_VERSION < 7
     zval_ptr_dtor( &SQLSRV_G( errors ));
     zval_ptr_dtor( &SQLSRV_G( warnings ));
 #endif
@@ -829,7 +871,7 @@ PHP_RSHUTDOWN_FUNCTION(sqlsrv)
 #if PHP_MAJOR_VERSION < 7 
 	full_mem_check(MEMCHECK_SILENT);
 #endif
-
+	LOG_FUNCTION_EXIT("PHP_RSHUTDOWN for php_sqlsrv");
     return SUCCESS;
 }
 

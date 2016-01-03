@@ -20,7 +20,7 @@
 #include "core_sqlsrv.h"
 
 #include <functional>
-#include <iostream>
+#include <iosfwd>// Avoiding including Iostream
 #include <sstream>
 
 using namespace core;
@@ -253,7 +253,7 @@ sqlsrv_buffered_result_set::sqlsrv_buffered_result_set( sqlsrv_stmt* stmt TSRMLS
     read_so_far(0)
 {
     // 10 is an arbitrary number for now for the initial size of the cache
-    ALLOC_HASHTABLE( cache );
+	sqlsrv_malloc_hashtable( &cache );
 
     core::sqlsrv_zend_hash_init( *stmt, cache, 10 /* # of buckets */, NULL /* hashfn */, cache_row_dtor /*dtor*/, 0 /*persistent*/ 
                                  TSRMLS_CC );

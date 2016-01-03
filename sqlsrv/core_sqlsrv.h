@@ -1,4 +1,5 @@
 #ifndef CORE_SQLSRV_H
+
 #define CORE_SQLSRV_H
 
 //---------------------------------------------------------------------------------------------------------------------------------
@@ -29,10 +30,44 @@
 #include "config.h"
 #endif
 
+// PHP equivalent of ASSERT.  C asserts cause a dialog to show and halt the process which
+// we don't want on a web server
+
+#define SQLSRV_ASSERT( condition, msg, ...)  if( !(condition)) DIE( msg, __VA_ARGS__ );
+
+#if defined( PHP_DEBUG )                             
+
+#define DEBUG_SQLSRV_ASSERT( condition, msg, ... )    \
+    if( !(condition)) {                               \
+        DIE (msg, __VA_ARGS__ );                      \
+    }                 
+
+#else
+
+#define DEBUG_SQLSRV_ASSERT( condition, msg, ... ) ((void)0)
+
+#endif 
+
+// types for conversions on output parameters (though they can be used for input parameters, they are ignored)
+enum SQLSRV_PHPTYPE {
+	MIN_SQLSRV_PHPTYPE = 1, // lowest value for a php type
+	SQLSRV_PHPTYPE_NULL = 1,
+	SQLSRV_PHPTYPE_INT,
+	SQLSRV_PHPTYPE_FLOAT,
+	SQLSRV_PHPTYPE_STRING,
+	SQLSRV_PHPTYPE_DATETIME,
+	SQLSRV_PHPTYPE_STREAM,
+	MAX_SQLSRV_PHPTYPE,      // highest value for a php type
+	SQLSRV_PHPTYPE_INVALID = MAX_SQLSRV_PHPTYPE     // used to see if a type is invalid
+};
+
 //PHP7 Port
 #include <php_version.h>
 #if PHP_MAJOR_VERSION >= 7
 #include "zend_utility.h"
+#include "core_memory.h"
+#include "core_errors.h"
+#include <limits>
 #endif
 
 #ifdef PHP_WIN32
@@ -41,25 +76,10 @@
 #define PHP_SQLSRV_API
 #endif
 
-// OACR is an internal Microsoft static code analysis tool
-#if defined(OACR)
-#include <oacr.h>
-OACR_WARNING_PUSH
-OACR_WARNING_DISABLE( ALLOC_SIZE_OVERFLOW, "Third party code." )
-OACR_WARNING_DISABLE( INDEX_NEGATIVE, "Third party code." )
-OACR_WARNING_DISABLE( UNANNOTATED_BUFFER, "Third party code." )
-OACR_WARNING_DISABLE( INDEX_UNDERFLOW, "Third party code." )
-OACR_WARNING_DISABLE( REALLOCLEAK, "Third party code." )
-OACR_WARNING_DISABLE( ALLOC_SIZE_OVERFLOW_WITH_ACCESS, "Third party code." )
-#else
-// define to eliminate static analysis hints in the code
-#define OACR_WARNING_SUPPRESS( warning, msg )
-#endif
-
 //PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-struct dummy_hash_func{};
-typedef dummy_hash_func* hash_func_t;
+struct stub_hash_func{};
+typedef stub_hash_func* hash_func_t;
 #endif
 
 extern "C" {
@@ -88,6 +108,33 @@ typedef int socklen_t;
 #include "ext/standard/info.h"
 
 #pragma warning(pop)
+
+//*********************************************************************************************************************************
+// Logging
+//*********************************************************************************************************************************
+// log_callback
+// a driver specific callback for logging messages
+// severity - severity of the message: notice, warning, or error
+// msg - the message to log in a FormatMessage style formatting
+// print_args - args to the message
+typedef void(*log_callback)(unsigned int severity TSRMLS_DC, const char* msg, va_list* print_args);
+
+// each driver must register a log callback.  This should be the first thing a driver does.
+void core_sqlsrv_register_logger(log_callback);
+
+// a simple wrapper around a PHP error logging function.
+void write_to_log(unsigned int severity TSRMLS_DC, const char* msg, ...);
+
+// a macro to make it convenient to use the function.
+#define LOG( severity, msg, ...)    write_to_log( severity TSRMLS_CC, msg, __VA_ARGS__ )
+
+// mask for filtering which severities are written to the log
+enum logging_severity {
+	SEV_ERROR = 0x01,
+	SEV_WARNING = 0x02,
+	SEV_NOTICE = 0x04,
+	SEV_ALL = -1,
+};
 
 #if ZEND_DEBUG
 // debug build causes warning C4505 to pop up from the Zend header files
@@ -155,19 +202,6 @@ const int SQL_SERVER_2005_DEFAULT_DATETIME_SCALE = 3;
 const int SQL_SERVER_2008_DEFAULT_DATETIME_PRECISION = 34;
 const int SQL_SERVER_2008_DEFAULT_DATETIME_SCALE = 7;   
 
-// types for conversions on output parameters (though they can be used for input parameters, they are ignored)
-enum SQLSRV_PHPTYPE {
-    MIN_SQLSRV_PHPTYPE = 1, // lowest value for a php type
-    SQLSRV_PHPTYPE_NULL = 1,
-    SQLSRV_PHPTYPE_INT,
-    SQLSRV_PHPTYPE_FLOAT,
-    SQLSRV_PHPTYPE_STRING,
-    SQLSRV_PHPTYPE_DATETIME,
-    SQLSRV_PHPTYPE_STREAM,
-    MAX_SQLSRV_PHPTYPE,      // highest value for a php type
-    SQLSRV_PHPTYPE_INVALID = MAX_SQLSRV_PHPTYPE     // used to see if a type is invalid
-};
-
 // encodings supported by this extension.  These basically translate into the use of SQL_C_CHAR or SQL_C_BINARY when getting
 // information as a string or a stream.  
 enum SQLSRV_ENCODING {
@@ -233,497 +267,6 @@ struct sqlsrv_static_assert<true> { static const int value = 1; };
 #define SQLSRV_STATIC_ASSERT( c )   (sqlsrv_static_assert<(c)>() )
 
 
-//*********************************************************************************************************************************
-// Logging
-//*********************************************************************************************************************************
-// log_callback
-// a driver specific callback for logging messages
-// severity - severity of the message: notice, warning, or error
-// msg - the message to log in a FormatMessage style formatting
-// print_args - args to the message
-typedef void (*log_callback)( unsigned int severity TSRMLS_DC, const char* msg, va_list* print_args );
-
-// each driver must register a log callback.  This should be the first thing a driver does.
-void core_sqlsrv_register_logger( log_callback );
-
-// a simple wrapper around a PHP error logging function.
-void write_to_log( unsigned int severity TSRMLS_DC, const char* msg, ... );
-
-// a macro to make it convenient to use the function.
-#define LOG( severity, msg, ...)    write_to_log( severity TSRMLS_CC, msg, __VA_ARGS__ )
-
-// mask for filtering which severities are written to the log
-enum logging_severity {
-    SEV_ERROR = 0x01,
-    SEV_WARNING = 0x02,
-    SEV_NOTICE = 0x04,
-    SEV_ALL = -1,
-};
-
-// Kill the PHP process and log the message to PHP
-void die( const char* msg, ... );
-#define DIE( msg, ... ) { die( msg, __VA_ARGS__ ); }
-
-
-//*********************************************************************************************************************************
-// Resource/Memory Management
-//*********************************************************************************************************************************
-
-// the macro max is defined and overrides the call to max in the allocator class
-#pragma push_macro( "max" )
-#undef max
-
-// new memory allocation/free debugging facilities to help us verify that all allocations are being 
-// released in a timely manner and not just at the end of the script.  
-// Zend has memory logging and checking, but it can generate a lot of noise for just one extension.
-// It's meant for internal use but might be useful for people adding features to our extension.
-// To use it, uncomment the #define below and compile in Debug NTS.  All allocations and releases
-// must be done with sqlsrv_malloc and sqlsrv_free.
-// #define SQLSRV_MEM_DEBUG  1
-#if defined( PHP_DEBUG ) && !defined( ZTS ) && defined( SQLSRV_MEM_DEBUG )
-
-inline void* sqlsrv_malloc_trace( size_t size, const char* file, int line )
-{
-    void* ptr = emalloc( size );
-    LOG( SEV_NOTICE, "emalloc returned %4!08x!: %1!d! bytes at %2!s!:%3!d!", size, file, line, ptr );
-    return ptr;
-}
-
-inline void* sqlsrv_malloc_trace( size_t element_count, size_t element_size, size_t extra, const char* file, int line )
-{
-    OACR_WARNING_SUPPRESS( ALLOC_SIZE_OVERFLOW_IN_ALLOC_WRAPPER, "Overflow verified below" );
-
-    if(( element_count > 0 && element_size > 0 ) &&
-        ( element_count > element_size * element_count || element_size > element_size * element_count )) {
-          DIE( "Integer overflow in sqlsrv_malloc" );
-    }
-
-    if( element_size * element_count > element_size * element_count + extra ) {
-        DIE( "Integer overflow in sqlsrv_malloc" );
-    }
-
-    if( element_size * element_count + extra == 0 ) {
-        DIE( "Allocation size must be more than 0" );
-    }
-
-    void* ptr = emalloc( element_size * element_count + extra );
-    LOG( SEV_NOTICE, "emalloc returned %4!08x!: %1!d! bytes at %2!s!:%3!d!", size, file, line, ptr );
-    return ptr;
-}
-
-inline void* sqlsrv_realloc_trace( void* buffer, size_t size, const char* file, int line )
-{
-    void* ptr = erealloc( original, size );
-    LOG( SEV_NOTICE, "erealloc returned %5!08x! from %4!08x!: %1!d! bytes at %2!s!:%3!d!", size, file, line, ptr, original );
-    return ptr;
-}
-
-inline void sqlsrv_free_trace( void* ptr, const char* file, int line )
-{
-    LOG( SEV_NOTICE, "efree %1!08x! at %2!s!:%3!d!", ptr, file, line );
-    efree( ptr );
-}
-
-#define sqlsrv_malloc( size ) sqlsrv_malloc_trace( size, __FILE__, __LINE__ )
-#define sqlsrv_malloc( count, size, extra ) sqlsrv_malloc_trace( count, size, extra, __FILE__, __LINE__ )
-#define sqlsrv_realloc( buffer, size ) sqlsrv_realloc_trace( buffer, size, __FILE__, __LINE__ )
-#define sqlsrv_free( ptr ) sqlsrv_free_trace( ptr, __FILE__, __LINE__ )
-
-#else
-
-inline void* sqlsrv_malloc( size_t size )
-{
-    return emalloc( size );
-}
-
-inline void* sqlsrv_malloc( size_t element_count, size_t element_size, size_t extra )
-{
-    OACR_WARNING_SUPPRESS( ALLOC_SIZE_OVERFLOW_IN_ALLOC_WRAPPER, "Overflow verified below" );
-
-    if(( element_count > 0 && element_size > 0 ) &&
-        ( element_count > element_size * element_count || element_size > element_size * element_count )) {
-          DIE( "Integer overflow in sqlsrv_malloc" );
-    }
-
-    if( element_size * element_count > element_size * element_count + extra ) {
-        DIE( "Integer overflow in sqlsrv_malloc" );
-    }
-
-    if( element_size * element_count + extra == 0 ) {
-        DIE( "Allocation size must be more than 0" );
-    }
-
-    return emalloc( element_size * element_count + extra );
-}
-
-inline void* sqlsrv_realloc( void* buffer, size_t size )
-{
-    return erealloc( buffer, size );
-}
-
-inline void sqlsrv_free( void* ptr )
-{
-    efree( ptr );
-}
-
-#endif
-
-// trait class that allows us to assign const types to an auto_ptr
-template <typename T>
-struct remove_const {
-    typedef T type;
-};
-
-template <typename T>
-struct remove_const<const T*> {
-    typedef T* type;
-};
-
-// allocator that uses the zend memory manager to manage memory
-// this allows us to use STL classes that still work with Zend objects
-template<typename T>
-struct sqlsrv_allocator {
-   
-    // typedefs used by the STL classes
-    typedef T value_type;
-    typedef value_type* pointer;
-    typedef const value_type* const_pointer;
-    typedef value_type& reference;
-    typedef const value_type& const_reference;
-    typedef std::size_t size_type;
-    typedef std::ptrdiff_t difference_type;
-
-    // conversion typedef (used by list and other STL classes)
-    template<typename U>
-    struct rebind {
-        typedef sqlsrv_allocator<U> other;
-    };
-
-    inline sqlsrv_allocator() {}
-    inline ~sqlsrv_allocator() {}
-    inline sqlsrv_allocator( sqlsrv_allocator const& ) {}
-    template<typename U>
-    inline sqlsrv_allocator( sqlsrv_allocator<U> const& ) {}
-
-    // address (doesn't work if the class defines operator&)
-    inline pointer address( reference r )
-    { 
-        return &r; 
-    }
-
-    inline const_pointer address( const_reference r )
-    {
-        return &r;
-    }
-
-    // memory allocation/deallocation
-    inline pointer allocate( size_type cnt, 
-                             typename std::allocator<void>::const_pointer = 0 )
-    {
-        return reinterpret_cast<pointer>( sqlsrv_malloc(cnt, sizeof (T), 0)); 
-    }
-
-    inline void deallocate( pointer p, size_type ) 
-    { 
-        sqlsrv_free(p); 
-    }
-
-    // size
-    inline size_type max_size( void ) const 
-    { 
-        return std::numeric_limits<size_type>::max() / sizeof(T);
-    }
-
-    // object construction/destruction
-    inline void construct( pointer p, const T& t )
-    {
-        new(p) T(t);
-    }
-
-    inline void destroy(pointer p)
-    {
-        p->~T();
-    }
-
-    // equality operators
-    inline bool operator==( sqlsrv_allocator const& )
-    {
-        return true;
-    }
-
-    inline bool operator!=( sqlsrv_allocator const& a )
-    {
-        return !operator==(a);
-    }
-}; 
-
-
-// base class for auto_ptrs that we define below.  It provides common operators and functions 
-// used by all the classes.  
-template <typename T, typename Subclass>
-class sqlsrv_auto_ptr {
-
-public:
-
-    sqlsrv_auto_ptr( void ) : _ptr( NULL )
-    {
-    }
-
-    ~sqlsrv_auto_ptr( void )
-    {
-        static_cast<Subclass*>(this)->reset( NULL );
-    }
-
-    // call when ownership is transferred
-    T *transferred( void )
-    {
-		T *rv = _ptr;
-        _ptr = NULL;
-		return rv;
-    }
-
-
-    // explicit function to get the pointer.
-    T* get( void ) 
-    {
-        return _ptr;
-    }
-
-    // cast operator to allow auto_ptr to be used where a normal const * can be.
-    operator T* () 
-    {
-        return _ptr;
-    }
-
-	operator const T* () const
-    {
-        return (const T*)_ptr;
-    }
-
-	// cast operator to allow auto_ptr to be used where a normal pointer can be.
-    /*
-	WTF.  This casts away const autmatically.  No.
-	operator typename remove_const<T*>::type () const
-    {
-        return _ptr;
-    }
-	*/
-
-    operator bool() const
-    {
-        return _ptr != NULL;
-    }
-
-    // there are a number of places where we allocate a block intended to be accessed as
-    // an array of elements, so this operator allows us to treat the memory as such.
-    template <class IX> T& operator[]( IX index ) 
-    {
-        return _ptr[ index ];
-    }
-
-
-    // access elements of a structure through the auto ptr
-    T* const operator->( void ) 
-    {
-        return _ptr;
-    }
-
-    // value from reference operator (i.e., i = *(&i); or *i = blah;)
-    T& operator*() 
-    {
-        return *_ptr;
-    }
-
-    // allow the use of the address-of operator to simulate a **.
-    // Note: this operator conflicts with storing these within an STL container.  If you need
-    // to do that, then redefine this as getpp and change instances of &auto_ptr to auto_ptr.getpp()
-    T** operator&( void )
-    {
-        return &_ptr;
-    }
-
-	bool operator!()
-	{
-		return _ptr == (T *)NULL;
-	}
-
-protected:
-
-    sqlsrv_auto_ptr( T* ptr ) : _ptr( ptr ) 
-    {
-    }
-
-	sqlsrv_auto_ptr( const sqlsrv_auto_ptr<T, Subclass> &src ) : _ptr( const_cast<sqlsrv_auto_ptr<T, Subclass> &>(src).transferred() )
-    {
-    }
-
-	sqlsrv_auto_ptr<T,Subclass>& operator=( const sqlsrv_auto_ptr<T,Subclass> &ref )
-    {
-		T *ptr = const_cast<sqlsrv_auto_ptr<T,Subclass> &>(ref).transferred();
-		return operator=(ptr);
-    }
-
-    // assign a new pointer to the auto_ptr.  It will free the previous memory block
-    // because ownership is deemed finished.
-    sqlsrv_auto_ptr<T,Subclass>& operator=( T* ptr )
-    {
-        static_cast<Subclass*>( this )->reset( ptr );
-        return *this;
-    }
-
-    mutable T* _ptr;   
-};
-
-// an auto_ptr for sqlsrv_malloc/sqlsrv_free.  When allocating a chunk of memory using sqlsrv_malloc, wrap that pointer
-// in a variable of sqlsrv_malloc_auto_ptr.  sqlsrv_malloc_auto_ptr will "own" that block and assure that it is
-// freed until the variable is destroyed (out of scope) or ownership is transferred using the function
-// "transferred".
-// DO NOT CALL sqlsrv_realloc with a sqlsrv_malloc_auto_ptr.  Use the resize member function.
-
-template <typename T>
-class sqlsrv_malloc_auto_ptr : public sqlsrv_auto_ptr<T, sqlsrv_malloc_auto_ptr<T> > 
-{
-
-public:
-	sqlsrv_malloc_auto_ptr( T *ptr=(T*)NULL ) :
-        sqlsrv_auto_ptr<T, sqlsrv_malloc_auto_ptr<T> >( ptr )
-    {
-    }
-
-    sqlsrv_malloc_auto_ptr( const sqlsrv_malloc_auto_ptr<T> & src ) : sqlsrv_auto_ptr<T, sqlsrv_malloc_auto_ptr<T> >( src )
-    {
-    }
-
-    // free the original pointer and assign a new pointer. Use NULL to simply free the pointer.
-    void reset( T* ptr = NULL )
-    {
-        if( _ptr && _ptr != ptr )
-		{
-			_ptr->~T();
-            sqlsrv_free( (void*) _ptr );
-		}
-        _ptr = ptr;
-    }
-
-    sqlsrv_malloc_auto_ptr<T>& operator=( const sqlsrv_malloc_auto_ptr<T>& src )
-    {
-		sqlsrv_auto_ptr<T, sqlsrv_malloc_auto_ptr<T> >::operator=( src );
-		return *this;
-    }
-
-    sqlsrv_malloc_auto_ptr<T>& operator=( T* ptr )
-    {
-        sqlsrv_auto_ptr<T, sqlsrv_malloc_auto_ptr<T> >::operator=( ptr );
-		return *this;
-    }
-
-    // DO NOT CALL sqlsrv_realloc with a sqlsrv_malloc_auto_ptr.  Use the resize member function.
-    // has the same parameter list as sqlsrv_realloc: new_size is the size in bytes of the newly allocated buffer
-	// This only makes sense if _ptr contains pod.
-    void resize( size_t new_size )
-    {
-        _ptr = reinterpret_cast<T*>( sqlsrv_realloc( _ptr, new_size ));
-    }
-};
-
-
-// auto ptr for Zend hash tables.  Used to clean up a hash table allocated when 
-// something caused an early exit from the function.  This is used when the hash_table is
-// allocated in a zval that itself can't be released.  Otherwise, use the zval_auto_ptr.
-
-class hash_auto_ptr : public sqlsrv_auto_ptr<HashTable, hash_auto_ptr> {
-
-public:
-
-    hash_auto_ptr( void ) :
-        sqlsrv_auto_ptr<HashTable, hash_auto_ptr>( NULL )
-    {
-    }
-
-    // free the original pointer and assign a new pointer. Use NULL to simply free the pointer.
-    void reset( HashTable* ptr = NULL )
-    {
-        if( _ptr && ptr != _ptr  ) 
-		{
-            zend_hash_destroy( _ptr );
-            FREE_HASHTABLE( _ptr );
-        }
-        _ptr = ptr;
-    }
-
-    hash_auto_ptr& operator=( HashTable* ptr )
-    {
-        sqlsrv_auto_ptr<HashTable, hash_auto_ptr>::operator=( ptr );
-		return *this;
-    }
-
-	hash_auto_ptr& operator=( const hash_auto_ptr &ref )
-    {
-        sqlsrv_auto_ptr<HashTable, hash_auto_ptr>::operator=( ref );
-		return *this;
-    }
-
-private:
-
-    hash_auto_ptr( HashTable const& hash );
-
-    hash_auto_ptr( hash_auto_ptr const& hash );
-};
-
-
-// an auto_ptr for zvals.  When allocating a zval, wrap that pointer in a variable of zval_auto_ptr.  
-// zval_auto_ptr will "own" that zval and assure that it is freed when the variable is destroyed 
-// (out of scope) or ownership is transferred using the function "transferred".
-
-class zval_auto_ptr : public sqlsrv_auto_ptr<zval, zval_auto_ptr> {
-
-public:
-
-    zval_auto_ptr( void )
-    {
-    }
-
-    // free the original pointer and assign a new pointer. Use NULL to simply free the pointer.
-    void reset( zval* ptr = NULL )
-    {
-        if( _ptr )
-		//PHP7 Port
-#if PHP_MAJOR_VERSION >= 7 
-		zval_ptr_dtor(_ptr);
-#else
-        zval_ptr_dtor( &_ptr );
-#endif
-		_ptr = ptr;
-    }
-
-    zval_auto_ptr& operator=( zval* ptr )
-    {
-        sqlsrv_auto_ptr<zval, zval_auto_ptr>::operator=( ptr );
-		return *this;
-    }
-	zval_auto_ptr& operator=( const zval_auto_ptr &ref )
-    {
-        sqlsrv_auto_ptr<zval, zval_auto_ptr>::operator=( ref );
-		return *this;
-    }
-	
-	//PHP7 Port
-#if PHP_MAJOR_VERSION < 7
-#if PHP_MAJOR_VERSION > 5 || (PHP_MAJOR_VERSION == 5 && PHP_MINOR_VERSION >= 3)
-    operator zval_gc_info*( void )
-    {
-        return reinterpret_cast<zval_gc_info*>(_ptr);
-    }
-#endif
-#endif
-
-private:
-
-    zval_auto_ptr( const zval_auto_ptr& src );
-};
-
-#pragma pop_macro( "max" )
-
 
 //*********************************************************************************************************************************
 // sqlsrv_error
@@ -782,6 +325,94 @@ struct sqlsrv_error : public sqlsrv_error_const
     }
 };
 
+// the macro max is defined and overrides the call to max in the allocator class
+#pragma push_macro( "max" )
+#undef max
+
+
+// allocator that uses the zend memory manager to manage memory
+// this allows us to use STL classes that still work with Zend objects
+template<typename T, bool persistency = true>
+class sqlsrv_allocator 
+{
+  public :
+		// typedefs used by the STL classes
+		typedef T value_type;
+		typedef value_type* pointer;
+		typedef const value_type* const_pointer;
+		typedef value_type& reference;
+		typedef const value_type& const_reference;
+		typedef std::size_t size_type;
+		typedef std::ptrdiff_t difference_type;
+
+		// conversion typedef (used by list and other STL classes)
+		template<typename U>
+		struct rebind {
+			typedef sqlsrv_allocator<U> other;
+		};
+
+		inline sqlsrv_allocator() {}
+		inline ~sqlsrv_allocator() {}
+		inline sqlsrv_allocator(sqlsrv_allocator const&) {}
+		template<typename U>
+		inline sqlsrv_allocator(sqlsrv_allocator<U> const&) {}
+
+		// address (doesn't work if the class defines operator&)
+		inline pointer address(reference r)
+		{
+			return &r;
+		}
+
+		inline const_pointer address(const_reference r)
+		{
+			return &r;
+		}
+
+		// memory allocation/deallocation
+		inline pointer allocate(size_type cnt, typename std::allocator< void >::const_pointer = 0)
+		{
+			return reinterpret_cast< pointer >(sqlsrv_malloc(cnt, sizeof(T), 0, persistency));
+		}
+
+		inline void deallocate(pointer p, size_type)
+		{
+			sqlsrv_free(p, persistency);
+		}
+
+		// size
+		inline size_type max_size( void ) const 
+    { 
+        return std::numeric_limits<size_type>::max() / sizeof(T);
+    }
+
+		// object construction/destruction
+		inline void construct(pointer p, const T& t)
+		{
+			new(p)T(t);
+		}
+
+		inline void destroy(pointer p)
+		{
+			p->~T();
+		}
+
+		// equality operators
+		inline bool operator==(sqlsrv_allocator const&)
+		{
+			return true;
+		}
+
+		inline bool operator!=(sqlsrv_allocator const& a)
+		{
+			return !operator==(a);
+		}
+
+};
+
+
+#pragma pop_macro( "max" )
+
+
 
 // an auto_ptr for sqlsrv_errors.  These call the destructor explicitly rather than call delete
 class sqlsrv_error_auto_ptr : public sqlsrv_auto_ptr<sqlsrv_error, sqlsrv_error_auto_ptr > 
@@ -827,7 +458,6 @@ public:
     
 };
 
-
 //*********************************************************************************************************************************
 // Context
 //*********************************************************************************************************************************
@@ -859,7 +489,7 @@ class sqlsrv_context {
     {
     }
 
-    sqlsrv_context( SQLHANDLE h, SQLSMALLINT t, error_callback e, void* drv, SQLSRV_ENCODING encoding = SQLSRV_ENCODING_INVALID ) :
+    sqlsrv_context( SQLHANDLE h, SQLSMALLINT t, error_callback e, void* drv, SQLSRV_ENCODING encoding = SQLSRV_ENCODING_INVALID, bool persistent = false ) :
         handle_( h ),
         handle_type_( t ),
         err_( e ),
@@ -867,6 +497,9 @@ class sqlsrv_context {
         driver_( drv ),
         last_error_(),
         encoding_( encoding )
+#if PHP_MAJOR_VERSION >= 7
+		,persistent_(persistent)
+#endif
     {
     }
 
@@ -934,8 +567,9 @@ class sqlsrv_context {
 
     void invalidate( void )
     {
-        if( handle_ != SQL_NULL_HANDLE ) {
-            ::SQLFreeHandle( handle_type_, handle_ );
+        if( handle_ != SQL_NULL_HANDLE ) 
+		{
+			::SQLFreeHandle( handle_type_, handle_ );
         }
         handle_ = SQL_NULL_HANDLE;
     }
@@ -955,6 +589,13 @@ class sqlsrv_context {
         encoding_ = e;
     }
 
+#if PHP_MAJOR_VERSION >= 7
+	bool persistency() const
+	{
+		return persistent_;
+	}
+#endif
+
  private:
     SQLHANDLE              handle_;          // ODBC handle for this context
     SQLSMALLINT            handle_type_;     // type of the ODBC handle
@@ -963,6 +604,9 @@ class sqlsrv_context {
     void*                  driver_;          // points back to the driver for PDO
     sqlsrv_error_auto_ptr  last_error_;      // last error that happened on this object
     SQLSRV_ENCODING        encoding_;        // encoding of the context   
+#if PHP_MAJOR_VERSION >= 7
+	bool persistent_;
+#endif
 };
 
 const int SQLSRV_OS_VISTA_OR_LATER = 6;           // major version for Vista
@@ -1296,7 +940,7 @@ struct sqlsrv_stmt : public sqlsrv_context {
     // holds output pointers for SQLBindParameter
     // We use a deque because it 1) provides the at/[] access in constant time, and 2) grows dynamically without moving
     // memory, which is important because we pass the pointer to an element of the deque to SQLBindParameter to hold
-    std::deque<SQLLEN>   param_ind_ptrs;  // output pointers for lengths for calls to SQLBindParameter
+    std::deque<SQLLEN, sqlsrv_allocator<SQLLEN>>   param_ind_ptrs;  // output pointers for lengths for calls to SQLBindParameter
     zval* param_input_strings;            // hold all UTF-16 input strings that aren't managed by PHP
     zval* output_params;                  // hold all the output parameters
     zval* param_streams;                  // track which streams to send data to the server
@@ -1319,7 +963,11 @@ struct sqlsrv_stmt : public sqlsrv_context {
 // *** field metadata struct ***
 struct field_meta_data {
 
+#if PHP_MAJOR_VERSION >= 7
+	SQLCHAR field_name[SS_MAXCOLNAMELEN * 2 + 1];
+#else
     sqlsrv_malloc_auto_ptr<SQLCHAR> field_name;
+#endif
     SQLSMALLINT field_name_len;
     SQLSMALLINT field_type;
     SQLULEN field_size;
@@ -1330,6 +978,9 @@ struct field_meta_data {
     field_meta_data() : field_name_len(0), field_type(0), field_size(0), field_precision(0),
                         field_scale (0), field_is_nullable(0)
     {
+#if PHP_MAJOR_VERSION >= 7
+		std::memset(field_name, 0, SS_MAXCOLNAMELEN * 2 + 1);
+#endif
     }
 
     ~field_meta_data() 
@@ -1360,9 +1011,9 @@ void core_sqlsrv_bind_param( sqlsrv_stmt* stmt, unsigned int param_num, int dire
 void core_sqlsrv_execute( sqlsrv_stmt* stmt TSRMLS_DC, const char* sql = NULL, int sql_len = 0 );
 field_meta_data *core_sqlsrv_field_metadata( sqlsrv_stmt* stmt, SQLSMALLINT colno TSRMLS_DC );
 bool core_sqlsrv_fetch( sqlsrv_stmt* stmt, SQLSMALLINT fetch_orientation, SQLLEN fetch_offset TSRMLS_DC );
-void core_sqlsrv_get_field( sqlsrv_stmt* stmt, SQLUSMALLINT field_index, sqlsrv_phptype sqlsrv_phptype, bool prefer_string,
-                            __out void** field_value, __out SQLLEN* field_length,  bool cache_field, 
-                            __out SQLSRV_PHPTYPE *sqlsrv_php_type_out TSRMLS_DC );
+void core_sqlsrv_get_field(sqlsrv_stmt* stmt, SQLUSMALLINT field_index, sqlsrv_phptype sqlsrv_phptype, bool prefer_string,
+	__out void** field_value, __out SQLLEN* field_length, bool cache_field,
+	__out SQLSRV_PHPTYPE *sqlsrv_php_type_out TSRMLS_DC);
 bool core_sqlsrv_has_any_result( sqlsrv_stmt* stmt TSRMLS_DC );
 void core_sqlsrv_next_result( sqlsrv_stmt* stmt TSRMLS_DC, bool finalize_output_params = true, bool throw_on_errors = true );
 void core_sqlsrv_post_param( sqlsrv_stmt* stmt, unsigned int paramno, zval* param_z TSRMLS_DC );
@@ -1670,24 +1321,6 @@ inline bool call_error_handler( sqlsrv_context* ctx, unsigned int sqlsrv_error_c
     return ignored;
 }
 
-// PHP equivalent of ASSERT.  C asserts cause a dialog to show and halt the process which
-// we don't want on a web server
-
-#define SQLSRV_ASSERT( condition, msg, ...)  if( !(condition)) DIE( msg, __VA_ARGS__ );
- 
-#if defined( PHP_DEBUG )                             
-
-#define DEBUG_SQLSRV_ASSERT( condition, msg, ... )    \
-    if( !(condition)) {                               \
-        DIE (msg, __VA_ARGS__ );                      \
-    }                 
-
-#else
-
-    #define DEBUG_SQLSRV_ASSERT( condition, msg, ... ) ((void)0)
-
-#endif 
-
 // check to see if the sqlstate is 01004, truncated field retrieved.  Used for retrieving large fields.
 inline bool is_truncated_warning( SQLCHAR* state )
 {
@@ -1716,8 +1349,13 @@ inline bool is_truncated_warning( SQLCHAR* state )
 #define CHECK_ERROR( condition, context, ... )  \
     CHECK_ERROR_UNIQUE( __COUNTER__, condition, context, NULL, __VA_ARGS__ )
 
+#if SQLSRV_ERROR_SYSTEM_ENABLE
 #define CHECK_CUSTOM_ERROR( condition, context, ssphp, ... )  \
     CHECK_ERROR_UNIQUE( __COUNTER__, condition, context, ssphp, __VA_ARGS__ )
+#else
+#define CHECK_CUSTOM_ERROR( condition, context, ssphp, ... ) \
+	if(0)
+#endif
 
 #define CHECK_SQL_ERROR( result, context, ... )  \
     SQLSRV_ASSERT( result != SQL_INVALID_HANDLE, "Invalid handle returned." ); \
@@ -1730,8 +1368,13 @@ inline bool is_truncated_warning( SQLCHAR* state )
     }   \
     if( !ignored##unique ) 
 
-#define CHECK_SQL_WARNING_AS_ERROR( result, context, ... ) \
+#if SQLSRV_ERROR_SYSTEM_ENABLED
+	#define CHECK_SQL_WARNING_AS_ERROR( result, context, ... ) \
     CHECK_WARNING_AS_ERROR_UNIQUE( __COUNTER__,( result == SQL_SUCCESS_WITH_INFO ), context, SQLSRV_ERROR_ODBC, __VA_ARGS__ )
+#else
+	#define CHECK_SQL_WARNING_AS_ERROR( result, context, ... ) \
+		if(0)
+#endif
     
 #define CHECK_SQL_WARNING( result, context, ... )        \
     if( result == SQL_SUCCESS_WITH_INFO ) {              \
@@ -1961,7 +1604,8 @@ namespace core {
     inline SQLRETURN SQLExecute( sqlsrv_stmt* stmt TSRMLS_DC )
     {
         SQLRETURN r;
-        r = ::SQLExecute( stmt->handle() );
+		auto handle = stmt->handle();
+        r = ::SQLExecute( handle );
    
         check_for_mars_error( stmt, r TSRMLS_CC );
 
@@ -2041,7 +1685,7 @@ namespace core {
     inline SQLRETURN SQLMoreResults( sqlsrv_stmt* stmt TSRMLS_DC )
     {
         SQLRETURN r = ::SQLMoreResults( stmt->handle() );
-
+		
         CHECK_SQL_ERROR_OR_WARNING( r, stmt ) {
             throw CoreException();
         }
@@ -2211,13 +1855,13 @@ namespace core {
         }
     }
 
-    inline void sqlsrv_array_init( sqlsrv_context& ctx, __out zval* new_array TSRMLS_DC) 
-    {
-        int zr = ::array_init( new_array );
-        CHECK_ZEND_ERROR( zr, ctx, SQLSRV_ERROR_ZEND_HASH ) {
-            throw CoreException();
-        }
-    }
+	inline void sqlsrv_array_init(sqlsrv_context& ctx, __out zval* new_array, bool persistent = false TSRMLS_DC)
+	{
+		int zr = sqlsrv_new_array_and_init(new_array, persistent);
+		CHECK_ZEND_ERROR(zr, ctx, SQLSRV_ERROR_ZEND_HASH) {
+			throw CoreException();
+		}
+	}
 
 	inline void sqlsrv_php_stream_from_zval_no_verify(sqlsrv_context& ctx, php_stream*& stream, zval** stream_z TSRMLS_DC)
 	{
@@ -2235,15 +1879,26 @@ namespace core {
 		}
 	}
 
+	inline zval* sqlsrv_zend_hash_get_current_data_ex(HashTable* ht, HashPosition* pos TSRMLS_DC)
+	{
+		return ::zend_hash_get_current_data_ex(ht, pos);
+	}
+
+	inline zval* sqlsrv_zend_hash_get_current_data(HashTable* ht TSRMLS_DC)
+	{
+		return ::zend_hash_get_current_data(ht);
+	}
+
 	inline void sqlsrv_zend_hash_get_current_data(sqlsrv_context& ctx, HashTable* ht, __out void** output_data TSRMLS_DC)
 	{
 	#if PHP_MAJOR_VERSION >= 7
-		auto temp = ::zend_hash_get_current_data(ht);
+		auto temp = core::sqlsrv_zend_hash_get_current_data(ht);
 		if (temp == NULL)
 		{
 			throw CoreException();
 		}
-		*output_data = reinterpret_cast<void *>(temp);
+		
+			*output_data = reinterpret_cast<void *>(temp);
 	#else
 		int zr = ::zend_hash_get_current_data(ht, output_data);
 		CHECK_ZEND_ERROR(zr, ctx, SQLSRV_ERROR_ZEND_HASH)
@@ -2253,18 +1908,29 @@ namespace core {
 	#endif
 	}
 
+	inline int sqlsrv_zend_hash_index_del(HashTable* ht, int index TSRMLS_DC)
+	{
+		return ::zend_hash_index_del(ht, index);
+	}
+
 	inline void sqlsrv_zend_hash_index_del( sqlsrv_context& ctx, HashTable* ht, int index TSRMLS_DC )
 	{
-		int zr = ::zend_hash_index_del( ht, index );
+		int zr = sqlsrv_zend_hash_index_del( ht, index );
 		CHECK_ZEND_ERROR( zr, ctx, SQLSRV_ERROR_ZEND_HASH ) 
 		{
 			throw CoreException();
 		}
 	}
 
+	
+	inline zval* sqlsrv_zend_hash_index_update(HashTable* ht, unsigned long index, zval* data TSRMLS_DC)
+	{
+		return ::zend_hash_index_update(ht, index, data);
+	}
+
 	//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-	inline void sqlsrv_zend_hash_index_update(sqlsrv_context& ctx, HashTable* ht, unsigned long index, zval* data,
+	inline void sqlsrv_zend_hash_index_update(sqlsrv_context& ctx, HashTable* ht, unsigned long index, void* data,
 		uint data_size TSRMLS_DC)
 #else
 	inline void sqlsrv_zend_hash_index_update(sqlsrv_context& ctx, HashTable* ht, unsigned long index, void* data,
@@ -2272,7 +1938,9 @@ namespace core {
 #endif
 	{
 #if PHP_MAJOR_VERSION >= 7
-		if (::zend_hash_index_update(ht, index, data) == NULL)
+		zval* data_ptr = (zval *)data;
+		
+		if ( sqlsrv_zend_hash_index_update(ht, index, data_ptr) == NULL)
 		{
 			throw CoreException();
 		}
@@ -2285,6 +1953,11 @@ namespace core {
 #endif
 	}
 
+	inline zval* sqlsrv_zend_hash_next_index_insert(HashTable* ht, zval* data)
+	{
+		return ::zend_hash_next_index_insert(ht, data);
+	}
+
 	//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
 	inline void sqlsrv_zend_hash_next_index_insert(sqlsrv_context& ctx, HashTable* ht, zval* data, uint data_size TSRMLS_DC)
@@ -2293,7 +1966,7 @@ namespace core {
 #endif
 	{
 #if PHP_MAJOR_VERSION >= 7
-		if (::zend_hash_next_index_insert(ht, data))
+		if (sqlsrv_zend_hash_next_index_insert(ht, data))
 		{
 			throw CoreException();
 		}
@@ -2306,11 +1979,16 @@ namespace core {
 #endif
 	}
 
+	inline void sqlsrv_zend_hash_init(HashTable* ht, unsigned int initial_size, hash_func_t hash_fn, dtor_func_t dtor_fn, zend_bool persistent TSRMLS_DC)
+	{
+		::zend_hash_init(ht, initial_size, hash_fn, dtor_fn, persistent);
+	}
+
 	//PHP7 Port
 	inline void sqlsrv_zend_hash_init(sqlsrv_context& ctx, HashTable* ht, unsigned int initial_size, hash_func_t hash_fn, dtor_func_t dtor_fn, zend_bool persistent TSRMLS_DC)
 	{
 #if	PHP_MAJOR_VERSION >= 7
-		::zend_hash_init(ht, initial_size, hash_fn, dtor_fn, persistent);
+		sqlsrv_zend_hash_init(ht, initial_size, hash_fn, dtor_fn, persistent);
 #else
 		int zr = ::zend_hash_init(ht, initial_size, hash_fn, dtor_fn, persistent);
 		CHECK_ZEND_ERROR(zr, ctx, SQLSRV_ERROR_ZEND_HASH)
@@ -2319,17 +1997,22 @@ namespace core {
 		}
 #endif
 	}
+
+	inline zval* sqlsrv_zend_hash_add(HashTable* ht, zend_string* key, zval* data TSRMLS_DC)
+	{
+		return ::zend_hash_add(ht, key, data);
+	}
 	
 	//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		inline void sqlsrv_zend_hash_add(sqlsrv_context& ctx, HashTable* ht, zend_string* key, unsigned int key_len, zval* data, unsigned int data_size, void **pDest TSRMLS_DC)
+	inline void sqlsrv_zend_hash_add(sqlsrv_context& ctx, HashTable* ht, zend_string* key, unsigned int key_len, zval* data, unsigned int data_size, void **pDest TSRMLS_DC)
 #else
 	inline void sqlsrv_zend_hash_add(sqlsrv_context& ctx, HashTable* ht, char* key, unsigned int key_len, void** data, unsigned int data_size, void **pDest TSRMLS_DC)
 #endif
 	{
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		if ( ::zend_hash_add(ht, key, data) == NULL)
+		if (sqlsrv_zend_hash_add(ht, key, data) == NULL)
 		{
 			throw CoreException();
 		}
@@ -2342,19 +2025,23 @@ namespace core {
 #endif
 	
 	}
-
+	
 	template <typename Statement>
-	sqlsrv_stmt* allocate_stmt( sqlsrv_conn* conn, SQLHANDLE h, error_callback e, void* driver TSRMLS_DC )
+	sqlsrv_stmt* allocate_stmt( sqlsrv_conn* conn, SQLHANDLE h, error_callback e, void* driver TSRMLS_DC)
 	{
-		return new ( sqlsrv_malloc( sizeof( Statement ))) Statement( conn, h, e, driver TSRMLS_CC );
+		return new ( sqlsrv_malloc( sizeof( Statement ), true)) Statement( conn, h, e, driver TSRMLS_CC);
 	}
 
 	template <typename Connection>
-	sqlsrv_conn* allocate_conn( SQLHANDLE h, error_callback e, void* driver TSRMLS_DC )
+	sqlsrv_conn* allocate_conn( SQLHANDLE h, error_callback e, void* driver TSRMLS_DC)
 	{
-		return new ( sqlsrv_malloc( sizeof( Connection ))) Connection( h, e, driver TSRMLS_CC );
+#if PHP_MAJOR_VERSION >= 7
+		return new ( sqlsrv_malloc( sizeof( Connection ), true)) Connection( h, e, driver TSRMLS_CC);
+#else
+		return new (sqlsrv_malloc(sizeof(Connection))) Connection(h, e, driver);
+#endif
 	}
-
+	
 } // namespace core
 
 #endif  // CORE_SQLSRV_H
