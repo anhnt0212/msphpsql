@@ -66,7 +66,9 @@ As mentioned above , this project also includes another unofficial patch. Other 
 Other main changes are :
 1. We centralised all memory allocations and frees in new core_memory.h file. We also added CRT debugging features to the same header file such as programatic
    breakpoints, CRT memory function hooks and CRT debug heap reporting. You can turn these on by adding SQLSRV_MEM_DEBUG=1 and SQLSRV_HOOK_CRT_MALLOC=1 to your preprocessor.
+
 2. We are using static memory with std::array for error and warning reporting : core_errors.h
+
 3. We also have added a new file ( zend_utility.h ) to the project which contains a few macros and functions for porting considerations and also for exploring new PHP7 engine.
 
 ## License
