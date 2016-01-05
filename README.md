@@ -36,7 +36,7 @@ Thomson Reuters FATCA Technology Team
 
 Official sqlsrv_num_rows documentation on http://php.net/manual/en/function.sqlsrv-num-rows.php is misleading.
 If you look at SQL Native Client documentation on https://msdn.microsoft.com/en-us/library/ms711835(v=vs.85).aspx 
-, sqlsrv_num_rows in fact returns number of raws affected.
+, sqlsrv_num_rows in fact returns the number of rows affected.
 
 ## Prerequisites 
 
