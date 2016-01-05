@@ -43,11 +43,12 @@ If you look at SQL Native Client documentation on https://msdn.microsoft.com/en-
 You will need to install Visual C++ 2015 runtime :
 https://www.microsoft.com/en-us/download/details.aspx?id=48145
 
-## Build
+## Build & Binaries
 
 The instructions are the same as those for the original driver , which can be found here :
 https://github.com/Azure/msphpsql
-The only different thing is you will need VS20015.
+The only different thing is you will need VS20015. You can also find the build DLL and the pdb file
+in "binaries_non_zts_x86" directory.
 
 ## Contact
 For your questions, please contact akin.ocal@thomsonreuters.com
