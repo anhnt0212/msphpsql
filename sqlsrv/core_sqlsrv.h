@@ -332,7 +332,11 @@ struct sqlsrv_error : public sqlsrv_error_const
 
 // allocator that uses the zend memory manager to manage memory
 // this allows us to use STL classes that still work with Zend objects
+#if RESOURCE_TABLE_PERSISTENCY || RESOURCE_TABLE_CUSTOM 
 template<typename T, bool persistency = true>
+#else
+template<typename T, bool persistency = false>
+#endif
 class sqlsrv_allocator 
 {
   public :
@@ -610,21 +614,6 @@ class sqlsrv_context {
 };
 
 const int SQLSRV_OS_VISTA_OR_LATER = 6;           // major version for Vista
-
-// maps an IANA encoding to a code page
-struct sqlsrv_encoding {
-
-    const char* iana;
-    unsigned int iana_len;
-    unsigned int code_page;
-    bool not_for_connection;
-
-    sqlsrv_encoding( const char* iana, unsigned int code_page, bool not_for_conn = false ):
-        iana( iana ), iana_len( (unsigned int)strlen( iana )), code_page( code_page ), not_for_connection( not_for_conn )
-    {
-    }
-};
-
 
 //*********************************************************************************************************************************
 // Initialization
@@ -940,7 +929,7 @@ struct sqlsrv_stmt : public sqlsrv_context {
     // holds output pointers for SQLBindParameter
     // We use a deque because it 1) provides the at/[] access in constant time, and 2) grows dynamically without moving
     // memory, which is important because we pass the pointer to an element of the deque to SQLBindParameter to hold
-    std::deque<SQLLEN, sqlsrv_allocator<SQLLEN>>   param_ind_ptrs;  // output pointers for lengths for calls to SQLBindParameter
+	std::deque<SQLLEN, sqlsrv_allocator<SQLLEN>>   param_ind_ptrs;  // output pointers for lengths for calls to SQLBindParameter
     zval* param_input_strings;            // hold all UTF-16 input strings that aren't managed by PHP
     zval* output_params;                  // hold all the output parameters
     zval* param_streams;                  // track which streams to send data to the server
@@ -2029,14 +2018,23 @@ namespace core {
 	template <typename Statement>
 	sqlsrv_stmt* allocate_stmt( sqlsrv_conn* conn, SQLHANDLE h, error_callback e, void* driver TSRMLS_DC)
 	{
+#if RESOURCE_TABLE_CUSTOM || RESOURCE_TABLE_PERSISTENCY
 		return new ( sqlsrv_malloc( sizeof( Statement ), true)) Statement( conn, h, e, driver TSRMLS_CC);
+#else
+		return new (sqlsrv_malloc(sizeof(Statement), false)) Statement(conn, h, e, driver TSRMLS_CC);
+#endif
 	}
 
 	template <typename Connection>
 	sqlsrv_conn* allocate_conn( SQLHANDLE h, error_callback e, void* driver TSRMLS_DC)
 	{
 #if PHP_MAJOR_VERSION >= 7
+#if RESOURCE_TABLE_CUSTOM || RESOURCE_TABLE_PERSISTENCY
 		return new ( sqlsrv_malloc( sizeof( Connection ), true)) Connection( h, e, driver TSRMLS_CC);
+#else
+
+		return new (sqlsrv_malloc(sizeof(Connection), false)) Connection(h, e, driver TSRMLS_CC);
+#endif
 #else
 		return new (sqlsrv_malloc(sizeof(Connection))) Connection(h, e, driver);
 #endif

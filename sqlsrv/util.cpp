@@ -604,12 +604,11 @@ PHP_FUNCTION( sqlsrv_configure )
 	LOG_FUNCTION("sqlsrv_configure");
 	//PHP7 Port
 #if PHP_MAJOR_VERSION < 7
+
 	SQLSRV_UNUSED(return_value_used);
 	SQLSRV_UNUSED(this_ptr);
 	SQLSRV_UNUSED(return_value_ptr);
 #endif
-
-   
 
     char* option;
     int option_len;

@@ -135,7 +135,11 @@ bool is_streamable_type( SQLINTEGER sql_type );
 sqlsrv_stmt::sqlsrv_stmt( sqlsrv_conn* c, SQLHANDLE handle, error_callback e, void* drv TSRMLS_DC ) :
     sqlsrv_context( handle, SQL_HANDLE_STMT, e, drv, SQLSRV_ENCODING_DEFAULT
 		#if PHP_MAJOR_VERSION >= 7
+#if RESOURCE_TABLE_PERSISTENCY || RESOURCE_TABLE_CUSTOM
 		, true /*persistency*/
+#else
+		, false /*persistency*/
+#endif
 		#endif
 		),
     conn( c ),
@@ -239,6 +243,12 @@ sqlsrv_stmt::~sqlsrv_stmt( void )
 		zval_destructor(param_streams);
 		zval_destructor(param_datetime_buffers);
 		zval_destructor(field_cache);
+		bool stmt_resource_persistency = persistency();
+		sqlsrv_free((param_input_strings), stmt_resource_persistency);
+		sqlsrv_free((param_streams), stmt_resource_persistency);
+		sqlsrv_free((param_datetime_buffers), stmt_resource_persistency);
+		sqlsrv_free((output_params), stmt_resource_persistency);
+		sqlsrv_free((field_cache), stmt_resource_persistency);
 	}
 	else
 	{
@@ -1826,7 +1836,7 @@ void core_get_field_common( __inout sqlsrv_stmt* stmt, SQLUSMALLINT field_index,
 			{
 #if PHP_MAJOR_VERSION >= 7
 				char field_value_temp[MAX_DATETIME_STRING_LEN] = { (char)NULL };
-				zval_auto_ptr return_value_z;
+				zval return_value_z;
 				zval function_name;
 				zval arg;
 
@@ -1838,25 +1848,48 @@ void core_get_field_common( __inout sqlsrv_stmt* stmt, SQLUSMALLINT field_index,
 					throw core::CoreException();
 				}
 
-				/// 666 Weird issue 
-#if PHP_MAJOR_VERSION >= 7
-				if (*field_len == -1)
+				sqlsrv_malloc_zval((zval**)field_value);
+
+				 // NULL DATE TIMES
+				if( *field_len == SQL_NULL_DATA ) 
 				{
+#if PHP_MAJOR_VERSION >= 7
+#ifndef _DEBUG
+					null_zval(&return_value_z);
+					ZVAL_COPY_VALUE((zval *)*field_value, &return_value_z);
+					break;
+#else
 					*field_len = strlen(field_value_temp);
-				}
 #endif
+#else
+					ZVAL_NULL(&return_value_z);
+					*field_value = reinterpret_cast<void*>(return_value_z.get());
+					return_value_z.transferred();
+					break;
+#endif
+				}
+				
+				ZVAL_STRINGL(&function_name, "date_create", strlen("date_create"));// DO NOT ADD +1 OTHERWISE call_user_function_ex fails
+				ZVAL_STRINGL(&arg, field_value_temp, strlen(field_value_temp));
 
-				ZVAL_STRINGL(&function_name, "date_create", 12);
-				ZVAL_STRINGL(&arg, field_value_temp, (*field_len) + 1);
+				
 
-				sqlsrv_malloc_zval(&return_value_z);
-
-				//666 Currently an issue with PHP7
-				if (call_user_function_ex(EG(function_table), NULL, &function_name, return_value_z, 1, &arg , 1, NULL ) == FAILURE)
+				if (call_user_function_ex(EG(function_table), NULL, &function_name, &return_value_z, 1, &arg , 1, NULL ) != FAILURE)
+				{
+					// We got the date time as a string from SQL Server
+					// Here we convert it to a PHP datetime object
+					//*field_value = (return_value_z.get());
+					ZVAL_COPY_VALUE((zval *)*field_value, &return_value_z);
+				}
+				else
 				{
 					php_error(E_WARNING, "Sqlsrv: failed invoking to call date_create");
-#if PHP_MAJOR_VERSION >= 7
-
+#if _DEBUG == 0
+					THROW_CORE_ERROR(stmt, SQLSRV_ERROR_DATETIME_CONVERSION_FAILED);	// If the builtin datetime extension functionality isn`t there
+													// than that is a serious issue
+#else
+					//The  reason we keep debug mode datetime->string conversion is that
+					//We don`t have date module inside our inhouse PHP7
 					if (*field_len == 0)
 					{
 						const char* null_string = "NULL";
@@ -1874,19 +1907,13 @@ void core_get_field_common( __inout sqlsrv_stmt* stmt, SQLUSMALLINT field_index,
 					sqlsrv_php_type->typeinfo.type = SQLSRV_PHPTYPE_STRING;
 #endif
 				}
-				else
-				{
-					*field_value = reinterpret_cast<void*>(&return_value_z);
-					return_value_z.transferred();
-				}
 
 #if PHP_MAJOR_VERSION >= 7
 				sqlsrv_free_zend_string(Z_STR(function_name));
 				sqlsrv_free_zend_string(Z_STR(arg));
 #endif
-				
 				break;
-#else
+#else // if php major version < 7
 				char field_value_temp[MAX_DATETIME_STRING_LEN];
 				zval_auto_ptr field_value_temp_z;
 				zval_auto_ptr return_value_z;

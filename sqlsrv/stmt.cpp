@@ -392,34 +392,42 @@ PHP_FUNCTION( sqlsrv_fetch )
 PHP_FUNCTION( sqlsrv_fetch_array )
 {
     LOG_FUNCTION( "sqlsrv_fetch_array" );
-    
+	
     ss_sqlsrv_stmt* stmt = NULL;
-    int fetch_type = SQLSRV_FETCH_BOTH; // default value for parameter if one isn't supplied
-    int fetch_style = SQL_FETCH_NEXT;   // default value for parameter if one isn't supplied
-    int fetch_offset = 0;               // default value for parameter if one isn't supplied
-
+#if PHP_MAJOR_VERSION >= 7
+    zend_long fetch_type = SQLSRV_FETCH_BOTH; // default value for parameter if one isn't supplied
+	zend_long fetch_style = SQL_FETCH_NEXT;   // default value for parameter if one isn't supplied
+	zend_long fetch_offset = 0;               // default value for parameter if one isn't supplied
+#else
+	int fetch_type = SQLSRV_FETCH_BOTH; // default value for parameter if one isn't supplied
+	int fetch_style = SQL_FETCH_NEXT;   // default value for parameter if one isn't supplied
+	int fetch_offset = 0;               // default value for parameter if one isn't supplied
+#endif
     // retrieve the statement resource and optional fetch type (see enum SQLSRV_FETCH_TYPE),
     // fetch style (see SQLSRV_SCROLL_* constants) and fetch offset
-    PROCESS_PARAMS( stmt, "r|lll", _FN_, 3, &fetch_type, &fetch_style, &fetch_offset );
-
+    
+	//We noticed that, if not all optional arguments are passed , this place is eventually causing crash.
+	PROCESS_PARAMS(stmt, "r|lll", _FN_, 3, &fetch_type, &fetch_style, &fetch_offset);
+	
     try {
     
         CHECK_CUSTOM_ERROR(( fetch_type < MIN_SQLSRV_FETCH || fetch_type > MAX_SQLSRV_FETCH ), stmt, 
                            SS_SQLSRV_ERROR_INVALID_FETCH_TYPE ) {
             throw ss::SSException();
         }
-
+		
         CHECK_CUSTOM_ERROR(( fetch_style < SQL_FETCH_NEXT || fetch_style > SQL_FETCH_RELATIVE ), stmt, 
                            SS_SQLSRV_ERROR_INVALID_FETCH_STYLE ) {
             throw ss::SSException();
         }
-
+		
         bool result = core_sqlsrv_fetch( stmt, fetch_style, fetch_offset TSRMLS_CC );
+		
         if( !result ) {
             RETURN_NULL();
         }
-
-        fetch_fields_common( stmt, fetch_type, return_value, true /*allow_empty_field_names*/ TSRMLS_CC );
+		
+		fetch_fields_common(stmt, fetch_type, return_value, true  TSRMLS_CC);
     }
 
     catch( core::CoreException& ) {
@@ -467,9 +475,8 @@ PHP_FUNCTION( sqlsrv_field_metadata )
     num_cols = core::SQLNumResultCols( stmt TSRMLS_CC );
 	
 #if PHP_MAJOR_VERSION >= 7
-	array_init(return_value);
 	// initialize the array
-	
+	array_init(return_value);
 #else
 	result_meta_data = (zval *)
 	ALLOC_INIT_ZVAL(result_meta_data);
@@ -627,7 +634,6 @@ PHP_FUNCTION( sqlsrv_next_result )
 		
 #if PHP_MAJOR_VERSION >= 7
 		core_sqlsrv_next_result(stmt, true, false);
-		// 666
 		// Pass false to throw_on_exceptions for now to avoid a memory leak
 		// which is inside core_sqlsrv_next_result-> core::SQLMoreResults -> CHECK_SQL_ERROR_OR_WARNING
 #else
@@ -1661,21 +1667,39 @@ void __cdecl sqlsrv_stmt_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
 	ss_sqlsrv_stmt *stmt = static_cast<ss_sqlsrv_stmt*>(rsrc->ptr);
 	//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-	bool persistency = true;
-	clean_hashtable((stmt->param_input_strings), persistency);
-	clean_hashtable((stmt->param_streams), persistency);
-	clean_hashtable((stmt->param_datetime_buffers), persistency);
-	clean_hashtable((stmt->output_params), persistency);
-	clean_hashtable((stmt->field_cache), persistency);
+#if RESOURCE_TABLE_PERSISTENCY || RESOURCE_TABLE_CUSTOM 
+	bool stmt_resource_persistency = true;
+#else
+	bool stmt_resource_persistency = false;
+#endif
+#if RESOURCE_TABLE_CUSTOM
+	clean_hashtable((stmt->param_input_strings), stmt_resource_persistency);
+	clean_hashtable((stmt->param_streams), stmt_resource_persistency);
+	clean_hashtable((stmt->param_datetime_buffers), stmt_resource_persistency);
+	clean_hashtable((stmt->output_params), stmt_resource_persistency);
+	clean_hashtable((stmt->field_cache), stmt_resource_persistency);
 	stmt->~ss_sqlsrv_stmt();
-	sqlsrv_free(stmt, true);
+	sqlsrv_free(stmt, stmt_resource_persistency);
 	sqlsrv_free(rsrc);
+#else
+	
+	if (stmt->conn) {
+
+		
+		int zr = static_cast<ss_sqlsrv_conn*>(stmt->conn)->remove_statement_handle((zend_ulong)stmt->conn_index);
+		if (zr == FAILURE) {
+			LOG(SEV_ERROR, "Failed to remove statement reference from the connection");
+		}
+	}
+
+	stmt->~ss_sqlsrv_stmt();
+	sqlsrv_free(stmt);
+	rsrc->ptr = NULL;
+#endif
 #else
 	stmt->~ss_sqlsrv_stmt();
 	sqlsrv_free(stmt);
-#endif
-	
-	rsrc->ptr = NULL;
+#endif	
 }
 
 // sqlsrv_free_stmt( resource $stmt )
@@ -1764,7 +1788,7 @@ PHP_FUNCTION( sqlsrv_free_stmt )
         // delete the resource from Zend's master list, which will trigger the statement's destructor
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-        int zr = core::sqlsrv_zend_hash_index_del( &(RESOURCE_TABLE), Z_RES_P( stmt_r )->handle);
+		int zr = core::sqlsrv_zend_hash_index_del(&(RESOURCE_TABLE), Z_RES_P(stmt_r)->handle);
 
         if( zr == FAILURE ) 
 		{
@@ -1778,7 +1802,6 @@ PHP_FUNCTION( sqlsrv_free_stmt )
 #endif
 
 		null_zval( stmt_r );
-
         RETURN_TRUE;
     
     }
@@ -1840,7 +1863,7 @@ void stmt_option_scrollable:: operator()( sqlsrv_stmt* stmt, stmt_option const* 
 
 namespace {
 #if PHP_MAJOR_VERSION >= 7
-	void convert_to_zval(SQLSRV_PHPTYPE sqlsrv_php_type, void** in_val, SQLLEN field_len, zval* out_zval)
+	void convert_to_zval(SQLSRV_PHPTYPE sqlsrv_php_type, void** in_val, SQLLEN field_len, zval* out_zval) 
 #else
 	zval* convert_to_zval(SQLSRV_PHPTYPE sqlsrv_php_type, void** in_val, SQLLEN field_len)
 #endif
@@ -1901,8 +1924,12 @@ namespace {
 	
 		case SQLSRV_PHPTYPE_STREAM:
 		case SQLSRV_PHPTYPE_DATETIME:
-
+#if PHP_MAJOR_VERSION >= 7
+			//out_zval = (reinterpret_cast<zval*>(*in_val));
+			ZVAL_COPY_VALUE(out_zval, reinterpret_cast<zval*>(*in_val));
+#else
 			out_zval = (reinterpret_cast<zval*>(*in_val));
+#endif
 			break;
 
 		case SQLSRV_PHPTYPE_NULL:
@@ -2180,7 +2207,7 @@ void fetch_fields_common( __inout ss_sqlsrv_stmt* stmt, int fetch_type, __out zv
     sqlsrv_php_type.typeinfo.type = SQLSRV_PHPTYPE_INVALID;
     SQLSRV_PHPTYPE sqlsrv_php_type_out = SQLSRV_PHPTYPE_INVALID;
 	void* field_value = nullptr;
-
+	
     // make sure that the fetch type is legal
     CHECK_CUSTOM_ERROR(( fetch_type < MIN_SQLSRV_FETCH || fetch_type > MAX_SQLSRV_FETCH ), stmt,  SS_SQLSRV_ERROR_INVALID_FETCH_TYPE, stmt->func() ) 
 	{
@@ -2239,6 +2266,7 @@ void fetch_fields_common( __inout ss_sqlsrv_stmt* stmt, int fetch_type, __out zv
 	array_init(&fields);
 
 	// get the fields
+	
 	for (int i = 0; i <num_cols; ++i)
 	{
 		zval field;
@@ -2247,8 +2275,8 @@ void fetch_fields_common( __inout ss_sqlsrv_stmt* stmt, int fetch_type, __out zv
 
 		try
 		{
-			core_sqlsrv_get_field(stmt, i, sqlsrv_php_type, true /*prefer string*/,
-				&(field_value), &field_len, false /*cache_field*/, &sqlsrv_php_type_out TSRMLS_CC);
+			core_sqlsrv_get_field(stmt, i, sqlsrv_php_type, true ,
+				&(field_value), &field_len, false , &sqlsrv_php_type_out TSRMLS_CC);
 
 			if (fetch_type & SQLSRV_FETCH_NUMERIC)
 			{
@@ -2267,6 +2295,7 @@ void fetch_fields_common( __inout ss_sqlsrv_stmt* stmt, int fetch_type, __out zv
 		}
 
 		sqlsrv_free(field_value);
+		field_value = nullptr;
 
 		if (fetch_type & SQLSRV_FETCH_NUMERIC)
 		{
@@ -2296,7 +2325,7 @@ void fetch_fields_common( __inout ss_sqlsrv_stmt* stmt, int fetch_type, __out zv
 			}
 		}
 	} //for loop
-
+	
 	*return_value = fields;
 
 #else
@@ -2657,10 +2686,7 @@ bool is_valid_sqlsrv_sqltype( sqlsrv_sqltype sql_type )
 bool verify_and_set_encoding( const char* encoding_string, __out sqlsrv_phptype& phptype_encoding TSRMLS_DC )
 {
 #if PHP_MAJOR_VERSION >= 7
-	HashPosition pos;
-	for (zend_hash_internal_pointer_reset_ex(g_ss_encodings_ht, &pos);
-	;
-		zend_hash_move_forward_ex(g_ss_encodings_ht, &pos))
+	for (std::size_t i{ 0 }; i < SSConstants::SQLSRV_ENCODING_COUNT; i++)
 #else
     for( zend_hash_internal_pointer_reset( g_ss_encodings_ht );
          zend_hash_has_more_elements( g_ss_encodings_ht ) == SUCCESS;
@@ -2668,37 +2694,18 @@ bool verify_and_set_encoding( const char* encoding_string, __out sqlsrv_phptype&
 #endif
 	{
 
-#if PHP_MAJOR_VERSION >= 7
-		int type = HASH_KEY_NON_EXISTENT;
-		zend_string *key = NULL;
-		unsigned int key_len = -1;
-		zend_ulong index = -1;
-
-		type = zend_hash_get_current_key_ex(g_ss_encodings_ht, &key, &index, &pos);
-
-		if (HASH_KEY_NON_EXISTENT == type)
-		{
-			break;
-		}
-#endif
-
         sqlsrv_encoding* encoding = NULL;
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		encoding = (sqlsrv_encoding *)core::sqlsrv_zend_hash_get_current_data_ex(g_ss_encodings_ht, &pos);
-
-		if (encoding == NULL)
-		{
-			DIE("Fatal: Error retrieving encoding from encoding hash table.");
-		}
+		encoding = &(g_ss_encodings[i]);
 #else
         int zr = zend_hash_get_current_data( g_ss_encodings_ht, (void**) &encoding );
 		if (zr == FAILURE) {
 			DIE("Fatal: Error retrieving encoding from encoding hash table.");
 	}
 #endif
-        if( !_stricmp( encoding_string, encoding->iana )) {
-            phptype_encoding.typeinfo.encoding = encoding->code_page;
+        if( !_stricmp( encoding_string, encoding->m_iana )) {
+            phptype_encoding.typeinfo.encoding = encoding->m_code_page;
             return true;
         }
     }

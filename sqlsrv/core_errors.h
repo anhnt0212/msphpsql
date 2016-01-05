@@ -82,8 +82,11 @@ class ErrorManager
 		void get_errors_as_zval_array(zval * zv, ErrorConsts::RequestType requestType)
 		{
 			sqlsrv_new_array_and_init(zv);
+			
 			for (std::size_t i{ 0 }; i < m_error_count; i++ )
 			{
+				zval current_error;
+				sqlsrv_new_array_and_init(&current_error);
 				Error iter = m_errors[i];
 				bool valid = true;
 
@@ -110,9 +113,11 @@ class ErrorManager
 
 				if (valid)
 				{
-					add_assoc_long(zv, "code", iter.native_code);
-					add_assoc_string(zv, "message", &iter.msg[0]);
-					add_assoc_string(zv, "SQLSTATE", &iter.sql_state[0]);
+					add_assoc_long(&current_error, "code", iter.native_code);
+					add_assoc_string(&current_error, "message", &iter.msg[0]);
+					add_assoc_string(&current_error, "SQLSTATE", &iter.sql_state[0]);
+
+					add_next_index_zval(zv, &current_error);
 				}
 			}
 		}

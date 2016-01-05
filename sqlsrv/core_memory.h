@@ -22,6 +22,10 @@
 // 1. Every malloc/free/realloc in the project are done here
 // 2. Added persistency flags to all allocation functions, STL allocator class and smart pointer classes
 // 3. Added debug utility functionality such as programatic memory breakpoints and overriding CRT malloc/frees
+// 4. Added  a commented out primitive heap verifier ( basically a heap walker ) and programatic memory breakpoints function
+//    for troubleshooting corruptions
+// 5. The only memory related class which is not here is sqlsrv_allocator in core_sqlsrv.h , which is an STL allocator
+//    calling memory allocation functions in this file.
 //
 
 //
@@ -41,6 +45,64 @@
 // 3. In one of PHP SAPI`s entry points call _CrtSetDbgFlag(_CRTDBG_LEAK_CHECK_DF | _CRTDBG_ALLOC_MEM_DF) ( For example : main function in php_cli.c )
 // 4. Eiher VS output windows or Dbgview will show leaks with an allocation number
 // 5. To place breakpoints to those allocations again in a SAPI entry point place  place _CrtSetBreakAlloc(<allocation_number>)
+
+// Before PHP7 , the ZendMM was providing full_mem_check , however this doesn`t exist in PHP7
+// So during dev, came up with our own primitive version as we had several corruptions, which you can add it to your custom PHP builds
+// This one simply traverses all slots in all bin linked lists and will crash when an expected slot is unavailable,  very likely 
+// deleted unexpectedly, so it will act as early crasher and can help you to find the place where that corruption happens
+// Particularly useful when combined with insert_data_breakpoint we  provide below ,which enables you to programatically spot corruption places.
+/*
+ZEND_API void full_mem_check()
+{
+	zend_mm_heap* heap = AG(mm_heap);
+	FILE* target = stdout;
+	/////////////////////////////////////////////////////////////////////
+	// Chunks
+	int chunk_index = 0;
+	zend_mm_chunk* chunk_ptr = heap->main_chunk;
+
+	while (chunk_ptr)
+	{
+		//fprintf(target, "\tCurrent chunk index %d , free pages count %d \n", chunk_index++, chunk_ptr->free_pages);
+		// It is a doubly linked list
+		if (chunk_ptr == chunk_ptr->next) { chunk_ptr = NULL; }
+		else { chunk_ptr = chunk_ptr->next; }
+	}
+
+	/////////////////////////////////////////////////////////////////////
+	// Bins
+	//fprintf(target, "************** BINS ***************************\n");
+	long total_size_in_bins = 0;
+
+	for (int i = 0; i < ZEND_MM_BINS; i++)
+	{
+		zend_mm_free_slot* current_bin = heap->free_slot[i];
+		zend_mm_free_slot* current_slot = current_bin;
+		int slot_count = 0;
+		
+		while ( current_slot )
+		{
+			zend_mm_free_slot* temp = current_slot;
+			slot_count++;
+
+			// It is a doubly linked list
+			if (current_slot == current_slot->next_free_slot) { current_slot = NULL; }
+			else { current_slot = current_slot->next_free_slot; }
+		}
+	
+		fprintf(target, "\tCurrent bin index %d , bin used for allocs of size %d , free slots %d \n", i, bin_data_size[i], slot_count);
+		// Increment total_size_in_bits
+		total_size_in_bins += bin_data_size[i] * slot_count;
+	}
+
+	////////////////////////////////////////////////////////////////////
+	// All size information
+	fprintf(target, "\nSize of heap is %d bytes\n", zend_memory_usage(0));
+	fprintf(target, "\nTotal size in all bins is %d bytes", total_size_in_bins);
+
+	return heap;
+}
+*/
 
 #if _DEBUG
 inline unsigned long insert_data_breakpoint(void* address, DWORD protectionMode = PAGE_EXECUTE)
@@ -101,6 +163,35 @@ inline void hook_crt_malloc()
 #pragma push_macro( "max" )
 #undef max
 
+//*********************************************************************************************************************************
+// Resource table
+//*********************************************************************************************************************************
+// We tried 2 different resource tables as well as our custom one,  
+// For production , you should use EG(regular_list) : RESOURCE_TABLE_CUSTOM=0 & RESOURCE_TABLE_PERSISTENCY=0
+#if PHP_MAJOR_VERSION >= 7
+
+#define RESOURCE_TABLE_CUSTOM 0 // Are we using Zend regular_list or persistent_list or own custom one
+#define RESOURCE_TABLE_PERSISTENCY 0 // Zend memory or CRT memory
+
+#define RESOURCE_TABLE_INITIAL_SIZE 256
+
+// When I tried different custom static data structures I was unable to return resources to callers in php 
+// such as sqlsrv_connect and sqlsrv_prepare
+#if RESOURCE_TABLE_CUSTOM	
+#define RESOURCE_TABLE (SQLSRV_G(resources))
+#else
+#if RESOURCE_TABLE_PERSISTENCY 
+#define  RESOURCE_TABLE EG(persistent_list)
+#else				
+#define  RESOURCE_TABLE EG(regular_list)
+#endif
+#endif		
+
+#endif
+
+//*********************************************************************************************************************************
+// Allocation and free functions
+//*********************************************************************************************************************************
 inline void sqlsrv_malloc_resource(zval* zv, int index, void* resource_pointer, int resource_type, bool persistent = false)
 {
 	if (persistent)
@@ -335,9 +426,9 @@ inline void __cdecl persistent_zval_with_res_dtor(zval* val)
   free(val->value.res);
 }
 
-////////////////////////////////////////////////////////////////////////////////////
-//////////////////// SMART POINTERS
-////////////////////////////////////////////////////////////////////////////////////
+//*********************************************************************************************************************************
+// Smart pointers
+//*********************************************************************************************************************************
 
 // trait class that allows us to assign const types to an auto_ptr
 template <typename T>

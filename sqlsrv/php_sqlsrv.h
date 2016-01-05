@@ -71,6 +71,8 @@ typedef int socklen_t;
 #include "ext/standard/php_standard.h"
 #include "ext/standard/info.h"
 
+#include <algorithm>
+
 #pragma warning(pop)
 
 //PHP7 Port
@@ -89,10 +91,39 @@ typedef int socklen_t;
 //*********************************************************************************************************************************
 // Initialization Functions
 //*********************************************************************************************************************************
+namespace SSConstants
+{
+	const std::size_t MAX_CONNECTION_STATEMENTS = 4096;
+	const std::size_t SQLSRV_ENCODING_COUNT = 3;
+	const std::size_t MAX_IANA_SIZE = 256;
+}
+// maps an IANA encoding to a code page
+struct sqlsrv_encoding {
+
+	unsigned int m_iana_len;
+	unsigned int m_code_page;
+	bool m_not_for_connection;
+	char m_iana[SSConstants::MAX_IANA_SIZE];
+
+	sqlsrv_encoding() : m_iana_len{ 0 }, m_code_page{ 0 }, m_not_for_connection{ false }
+	{
+		std::for_each(m_iana, m_iana + SSConstants::MAX_IANA_SIZE, [&](char ch) {ch = '\0'; });
+	}
+
+	sqlsrv_encoding(const char* iana, unsigned int code_page, bool not_for_conn = false) :
+		m_iana_len((unsigned int)strlen(iana)), m_code_page(code_page), m_not_for_connection(not_for_conn)
+	{
+		std::copy(iana, iana + m_iana_len, m_iana);
+	}
+};
 
 // module global variables (initialized in minit and freed in mshutdown)
 extern HashTable* g_ss_errors_ht;
+#if PHP_MAJOR_VERSION >= 7
+extern sqlsrv_encoding g_ss_encodings[SSConstants::SQLSRV_ENCODING_COUNT];
+#else
 extern HashTable* g_ss_encodings_ht;
+#endif
 extern HashTable* g_ss_warnings_to_ignore_ht;
 
 // variables set during initialization
@@ -129,13 +160,17 @@ PHP_FUNCTION(sqlsrv_prepare);
 PHP_FUNCTION(sqlsrv_rollback);
 PHP_FUNCTION(sqlsrv_server_info);
 
-#define MAX_CONNECTION_STATEMENTS 4096
+
 
 struct ss_sqlsrv_conn : sqlsrv_conn
 {
 #if PHP_MAJOR_VERSION >= 7
+#if RESOURCE_TABLE_CUSTOM
 	long stmts[MAX_CONNECTION_STATEMENTS];
 	int stmts_pointer;
+#else
+	HashTable*     stmts;
+#endif
 #else
 	HashTable*     stmts;
 #endif
@@ -149,10 +184,14 @@ struct ss_sqlsrv_conn : sqlsrv_conn
 	bool persistent_;
 
     // initialize with default values
-    ss_sqlsrv_conn( SQLHANDLE h, error_callback e, void* drv) : 
-        sqlsrv_conn( h, e, drv, SQLSRV_ENCODING_SYSTEM TSRMLS_CC ),
+	ss_sqlsrv_conn(SQLHANDLE h, error_callback e, void* drv) :
+		sqlsrv_conn(h, e, drv, SQLSRV_ENCODING_SYSTEM TSRMLS_CC),
 #if PHP_MAJOR_VERSION >= 7
+#if RESOURCE_TABLE_CUSTOM
 		stmts_pointer{ 0 },
+#else
+		stmts(NULL),
+#endif
 #else
 		stmts(NULL),
 #endif
@@ -165,15 +204,27 @@ struct ss_sqlsrv_conn : sqlsrv_conn
 	{
 		int next_index = -1;
 #if PHP_MAJOR_VERSION >= 7
+#if RESOURCE_TABLE_CUSTOM
 		next_index = stmts_pointer;
 		stmts[next_index] = stmt_res_handle;
 		stmts_pointer++;
 #else
-		next_index = zend_hash_next_free_element(conn->stmts);
-		core::sqlsrv_zend_hash_index_update(*conn, conn->stmts, next_index, &stmt_res_handle, sizeof(long));
+		next_index = zend_hash_next_free_element(this->stmts);
+		core::sqlsrv_zend_hash_index_update(*this, this->stmts, next_index, &stmt_res_handle, sizeof(long));
+#endif
+#else
+		next_index = zend_hash_next_free_element(this->stmts);
+		core::sqlsrv_zend_hash_index_update(*this, this->stmts, next_index, &stmt_res_handle, sizeof(long));
 #endif
 		return next_index;
 	}
+
+#if RESOURCE_TABLE_CUSTOM == 0
+	int remove_statement_handle(zend_ulong index)
+	{
+		return ::zend_hash_index_del(stmts, index);
+	}
+#endif
 };
 
 // resource destructor
@@ -334,30 +385,6 @@ ZEND_EXTERN_MODULE_GLOBALS(sqlsrv);
 #define SQLSRV_G(v) sqlsrv_globals.v
 #endif
 
-//*********************************************************************************************************************************
-// Resource table
-//*********************************************************************************************************************************
-#if PHP_MAJOR_VERSION >= 7
-
-#define RESOURCE_TABLE_CUSTOM 1 // Are we using Zend regular_list or persistent_list or own custom one
-#define RESOURCE_TABLE_PERSISTENCY 0 // Zend memory or CRT memory
-
-#define RESOURCE_TABLE_INITIAL_SIZE 256
-
-// When I tried different custom static data structures I was unable to return resources to callers in php 
-// such as sqlsrv_connect and sqlsrv_prepare
-#if RESOURCE_TABLE_CUSTOM	
-#define RESOURCE_TABLE (SQLSRV_G(resources))
-#else
-#if RESOURCE_TABLE_PERSISTENCY 
-#define  RESOURCE_TABLE EG(persistent_list)
-#else				
-#define  RESOURCE_TABLE EG(regular_list)
-#endif
-#endif		
-
-#endif
-
 // INI settings and constants
 // (these are defined as macros to allow concatenation as we do below)
 #define INI_WARNINGS_RETURN_AS_ERRORS   "WarningsReturnAsErrors"
@@ -387,6 +414,7 @@ PHP_INI_END()
 
 PHP_FUNCTION(sqlsrv_configure);
 PHP_FUNCTION(sqlsrv_get_config);
+
 
 //*********************************************************************************************************************************
 // Errors
@@ -710,8 +738,8 @@ inline H* process_params( INTERNAL_FUNCTION_PARAMETERS, char const* param_spec, 
     
         return NULL;
     }
-    catch ( ... ) {
-    
+    catch ( ... ) 
+	{
         DIE( "%1!s!: Unknown exception caught in process_params.", calling_func );
     }
 }
@@ -737,6 +765,7 @@ namespace ss {
 
 	inline void *zend_fetch_resource(zend_resource *res, const char *resource_type_name, int resource_type)
 	{
+#if RESOURCE_TABLE_CUSTOM 
 		if (resource_type == res->type) 
 		{
 			return res->ptr;
@@ -750,10 +779,14 @@ namespace ss {
 		}
 
 		return NULL;
+#else
+		return ::zend_fetch_resource(res, resource_type_name, resource_type);
+#endif
 	}
 
 	inline zend_resource* zend_register_resource( void* rsrc_pointer, int rsrc_type, char* rsrc_name)
 	{
+#if RESOURCE_TABLE_CUSTOM 
 		zval* zv = NULL;
 		int index = -1;
 		zval zv_res;
@@ -768,7 +801,7 @@ namespace ss {
 
 		zv = zend_hash_index_add_new(&RESOURCE_TABLE, index, &zv_res);
 
-		// 666 make it non ref counted to avoid to be cleaned by i_free_compiled_variables when it clears CV table
+		// make it non ref counted to avoid to be cleaned by i_free_compiled_variables when it clears CV table
 		// this work around also causes a mem leak at the moment
 		make_zval_non_refcounted(zv);
 		
@@ -778,6 +811,36 @@ namespace ss {
 		}
 		
 		return Z_RES_P(zv);
+#else
+		zval* zv = NULL;
+		int index = -1;
+		zval zv_res;
+
+		index = zend_hash_next_free_element(&RESOURCE_TABLE);
+		if (index == 0)
+		{
+			index = 1;
+		}
+
+		sqlsrv_malloc_resource(&zv_res, index, rsrc_pointer, rsrc_type, RESOURCE_TABLE_PERSISTENCY ? true : false);
+
+		zv = zend_hash_index_add_new(&RESOURCE_TABLE, index, &zv_res);
+
+		// make it non ref counted to avoid to be cleaned by i_free_compiled_variables when it clears CV table
+		// this work around also causes a mem leak at the moment
+#if _DEBUG
+		//make_zval_non_refcounted(zv);
+#endif
+
+		if (zv == NULL)
+		{
+			throw ss::SSException();
+		}
+
+		return Z_RES_P(zv);
+		//auto ret = ::zend_register_resource(rsrc_pointer, rsrc_type);
+		//return ret;
+#endif
 	}
 #else
 	inline void zend_register_resource(__out zval* rsrc_result, void* rsrc_pointer, int rsrc_type, char* rsrc_name)

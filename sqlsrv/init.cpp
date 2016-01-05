@@ -17,7 +17,6 @@
 //---------------------------------------------------------------------------------------------------------------------------------
 
 
-
 #include "php_sqlsrv.h"
 ZEND_GET_MODULE(g_sqlsrv)
 
@@ -32,7 +31,11 @@ HashTable* g_ss_errors_ht = NULL;
 // special list of warnings to ignore even if warnings are treated as errors
 HashTable* g_ss_warnings_to_ignore_ht = NULL;
 // encodings we understand
+#if PHP_MAJOR_VERSION >= 7
+sqlsrv_encoding g_ss_encodings[SSConstants::SQLSRV_ENCODING_COUNT];
+#else
 HashTable* g_ss_encodings_ht = NULL;
+#endif
 
 // henv context for creating connections
 sqlsrv_context* g_henv_cp;
@@ -355,7 +358,11 @@ PHP_MINIT_FUNCTION(sqlsrv)
     // register connection resource
 	// sqlsrv_conn_dtor
 #if PHP_MAJOR_VERSION >= 7
+#if RESOURCE_TABLE_CUSTOM 
 	ss_sqlsrv_conn::descriptor = ss::zend_register_list_destructors_ex(NULL, NULL, "SQL Server Connection", module_number);
+#else
+	ss_sqlsrv_conn::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_conn_dtor, NULL, "SQL Server Connection", module_number);
+#endif
 #else
 	ss_sqlsrv_conn::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_conn_dtor, NULL, "SQL Server Connection", module_number);
 #endif
@@ -368,7 +375,11 @@ PHP_MINIT_FUNCTION(sqlsrv)
     // register statement resources
 	// sqlsrv_stmt_dtor
 #if PHP_MAJOR_VERSION >= 7
+#if RESOURCE_TABLE_CUSTOM 
 	ss_sqlsrv_stmt::descriptor = ss::zend_register_list_destructors_ex(NULL, NULL, "SQL Server Statement", module_number);
+#else
+	ss_sqlsrv_stmt::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_stmt_dtor, NULL, "SQL Server Statement", module_number);
+#endif
 #else
     ss_sqlsrv_stmt::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_stmt_dtor, NULL, "SQL Server Statement", module_number );
 #endif
@@ -632,10 +643,7 @@ PHP_MINIT_FUNCTION(sqlsrv)
         // supported encodings
 		
 		 //PHP7 Port
-#if PHP_MAJOR_VERSION >= 7
-		sqlsrv_malloc_hashtable(&g_ss_encodings_ht, hash_tables_persistency);
-		core::sqlsrv_zend_hash_init(g_ss_encodings_ht, 3, NULL /*use standard hash function*/, NULL /*no resource destructor*/, 1 /*persistent*/);
-#else
+#if PHP_MAJOR_VERSION < 7
 		g_ss_encodings_ht = reinterpret_cast<HashTable*>(pemalloc(sizeof(HashTable), 1));
 		int zr = zend_hash_init(g_ss_encodings_ht, 3, NULL /*use standard hash function*/, NULL /*no resource destructor*/, 1 /*persistent*/);
 		if (zr == FAILURE) {
@@ -643,29 +651,22 @@ PHP_MINIT_FUNCTION(sqlsrv)
 		}
 #endif
        
-
+		std::size_t encodings_array_index = 0;
         sqlsrv_encoding sql_enc_char( "char", SQLSRV_ENCODING_CHAR );
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		auto zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_encodings_ht, (zval *)&sql_enc_char);
-		if (zr == NULL) {
-			throw ss::SSException();
-		}
+		g_ss_encodings[encodings_array_index++] = sql_enc_char;
 #else
 		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_encodings_ht, &sql_enc_char, sizeof(sqlsrv_encoding), NULL /*no pointer to the new value necessasry*/);
 		if (zr == FAILURE) {
 			throw ss::SSException();
 		}
 #endif
-       
-        
-        sqlsrv_encoding sql_enc_bin( "binary", SQLSRV_ENCODING_BINARY, true );
+		
+		sqlsrv_encoding sql_enc_bin( "binary", SQLSRV_ENCODING_BINARY, true );
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_encodings_ht, (zval *)&sql_enc_bin);
-		if (zr == NULL) {
-			throw ss::SSException();
-		}
+		g_ss_encodings[encodings_array_index++] = sql_enc_bin;
 #else
 		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_encodings_ht, &sql_enc_bin, sizeof(sqlsrv_encoding), NULL  /*no pointer to the new value necessasry*/);
 		if (zr == FAILURE) {
@@ -677,10 +678,7 @@ PHP_MINIT_FUNCTION(sqlsrv)
         sqlsrv_encoding sql_enc_utf8( "utf-8", CP_UTF8 );
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_encodings_ht, (zval *)&sql_enc_utf8);
-		if (zr == NULL) {
-			throw ss::SSException();
-		}
+		g_ss_encodings[encodings_array_index] = sql_enc_utf8;
 #else
 		zr = core::sqlsrv_zend_hash_next_index_insert(g_ss_encodings_ht, &sql_enc_utf8, sizeof(sqlsrv_encoding), NULL  /*no pointer to the new value necessasry*/);
 		if (zr == FAILURE) {
@@ -777,7 +775,10 @@ PHP_MINIT_FUNCTION(sqlsrv)
 PHP_MSHUTDOWN_FUNCTION(sqlsrv)
 {
 	LOG_FUNCTION("PHP_MSHUTDOWN_FUNCTION for php_sqlsrv");
-    SQLSRV_UNUSED( type );
+	SQLSRV_UNUSED(type);
+#if RESOURCE_TABLE_CUSTOM
+	
+   
     
     UNREGISTER_INI_ENTRIES();
 	
@@ -787,9 +788,7 @@ PHP_MSHUTDOWN_FUNCTION(sqlsrv)
 	clean_hashtable(g_ss_warnings_to_ignore_ht, hash_tables_persistency);
 	clean_hashtable(g_ss_encodings_ht, hash_tables_persistency);
 
-#if PHP_MAJOR_VERSION >= 7
 	sqlsrv_close_resource_list();
-#endif
 	
     core_sqlsrv_mshutdown( *g_henv_cp, *g_henv_ncp );
 
@@ -797,8 +796,23 @@ PHP_MSHUTDOWN_FUNCTION(sqlsrv)
 	{
         return FAILURE;
     }
+#else
+	// clean up the list of sqlsrv errors
+	bool hash_tables_persistency = true;
+	clean_hashtable(g_ss_errors_ht, hash_tables_persistency);
+	clean_hashtable(g_ss_warnings_to_ignore_ht, hash_tables_persistency);
+#if PHP_MAJOR_VERSION < 7
+	clean_hashtable(g_ss_encodings_ht, hash_tables_persistency);
+#endif
+
+	core_sqlsrv_mshutdown(*g_henv_cp, *g_henv_ncp);
+
+	if (php_unregister_url_stream_wrapper(SQLSRV_STREAM_WRAPPER TSRMLS_CC) == FAILURE) {
+		return FAILURE;
+	}
+#endif
+	return SUCCESS;
 	LOG_FUNCTION_EXIT("PHP_MSHUTDOWN_FUNCTION for php_sqlsrv");
-    return SUCCESS;
 }
 
 

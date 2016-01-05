@@ -8,7 +8,9 @@
 #include <php_version.h>
 
 #include <php.h>
-#ifdef _DEBUG // DONT INCLUDE IN RELEASE MODE AS IT IS TAKING AGES WITH THIS HEADER ! 
+// DONT INCLUDE IN RELEASE MODE AS IT IS TAKING AGES WITH THIS HEADER
+// ALSO CHANGED A FEW IOSTREAM INCLUSIONS IN ORIGINAL SQLSRV CPP FILES TO IOSFWD
+#ifdef _DEBUG    
 #include <iostream>
 #endif
 #include <cstddef>
@@ -54,22 +56,6 @@ inline zend_resource* zend_list_find(HashTable* resources, long res_handle, int 
 			ret = temp;
 		}
 	}
-	/*
-	uint32_t count = resources->nNumOfElements;
-
-	// Call the destructors of resource we have allocated
-	for (uint32_t i = 1; i < count; i++)
-	{
-		auto iter = resources->arData[i].val.value.res;
-		if (iter)
-		{
-			if (iter->handle == res_handle && iter->type == type)
-			{
-				ret = iter;
-				break;
-			}
-		}
-	}*/
 
 	return ret;
 }
@@ -88,7 +74,7 @@ inline void non_supported_function(const char* message)
 	php_error(E_ERROR, errorMessage);
 }
 
-#ifdef _DEBUG
+#ifdef _DEBUG 
 inline void dump_zval(zval* val)
 {
 	auto typeZval = Z_TYPE_P(val);

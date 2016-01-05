@@ -62,44 +62,27 @@ namespace {
 			const char* encoding = Z_STRVAL_P(value);
 			unsigned int encoding_len = Z_STRLEN_P(value);
 #if PHP_MAJOR_VERSION >= 7
-			HashPosition pos;
-			int type = HASH_KEY_NON_EXISTENT;
-			zend_string *key = NULL;
-			unsigned int key_len = -1;
-			zend_ulong index = -1;
-
-			
-			for (zend_hash_internal_pointer_reset_ex(g_ss_encodings_ht, &pos);
-			;
-				zend_hash_move_forward_ex(g_ss_encodings_ht, &pos)) {
+			for (std::size_t i{ 0 }; i < SSConstants::SQLSRV_ENCODING_COUNT ; i++)
 #else
 			for (zend_hash_internal_pointer_reset(g_ss_encodings_ht);
 			zend_hash_has_more_elements(g_ss_encodings_ht) == SUCCESS;
-				zend_hash_move_forward(g_ss_encodings_ht)) {
+				zend_hash_move_forward(g_ss_encodings_ht)) 
 #endif
-
-				type = zend_hash_get_current_key_ex(g_ss_encodings_ht, &key, &index, &pos);
-
-				if (HASH_KEY_NON_EXISTENT == type)
-				{
-					break;
-				}
-
-				sqlsrv_encoding* ss_encoding;
-
+			{
+				sqlsrv_encoding* ss_encoding = nullptr;
 #if PHP_MAJOR_VERSION >= 7
-				ss_encoding = (sqlsrv_encoding *) core::sqlsrv_zend_hash_get_current_data_ex( g_ss_encodings_ht, &pos );
+				ss_encoding = &(g_ss_encodings[i] );
 #else
 				core::sqlsrv_zend_hash_get_current_data(*conn, g_ss_encodings_ht, (void**)&ss_encoding TSRMLS_CC);
 #endif
 
-				if (!_strnicmp(encoding, ss_encoding->iana, encoding_len)) {
+				if (!_strnicmp(encoding, ss_encoding->m_iana, encoding_len)) {
 
-					if (ss_encoding->not_for_connection) {
+					if (ss_encoding->m_not_for_connection) {
 						THROW_SS_ERROR(conn, SS_SQLSRV_ERROR_CONNECT_ILLEGAL_ENCODING, encoding);
 					}
 
-					conn->set_encoding(static_cast<SQLSRV_ENCODING>(ss_encoding->code_page));
+					conn->set_encoding(static_cast<SQLSRV_ENCODING>(ss_encoding->m_code_page));
 					return;
 				}
 			}
@@ -492,16 +475,15 @@ PHP_FUNCTION(sqlsrv_connect)
 
 		SQLSRV_ASSERT(conn != NULL, "sqlsrv_connect: Invalid connection returned.  Exception should have been thrown.");
 
-		// create a bunch of statements
-#if PHP_MAJOR_VERSION < 7
-		stmts = sqlsrv_malloc_hashtable(stmts);
-		core::sqlsrv_zend_hash_init(*g_henv_cp, stmts, 5, NULL /* hashfn */,  /* dtor */zval_with_res_dtor, 0 /* persistent */ TSRMLS_CC);
-#endif
-
 		// register the connection with the PHP runtime        
 #if PHP_MAJOR_VERSION >= 7
 		zend_resource* res = ss::zend_register_resource(conn, ss_sqlsrv_conn::descriptor, ss_sqlsrv_conn::resource_name);
 		RETVAL_RES(res);
+#if RESOURCE_TABLE_CUSTOM == 0
+		// create a bunch of statements
+		sqlsrv_malloc_hashtable(&conn->stmts);
+		core::sqlsrv_zend_hash_init(*g_henv_cp, conn->stmts, 5, NULL /* hashfn */,  /* dtor */NULL, 0 /* persistent */ TSRMLS_CC);
+#endif
 #else
 		ss::zend_register_resource(return_value, conn, ss_sqlsrv_conn::descriptor, ss_sqlsrv_conn::resource_name TSRMLS_CC);
 		conn->stmts = stmts;
@@ -661,7 +643,12 @@ PHP_FUNCTION(sqlsrv_close)
 
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
+#if RESOURCE_TABLE_CUSTOM
 		int zr = core::sqlsrv_zend_hash_index_del(&RESOURCE_TABLE, Z_RES_P(conn_r)->handle);
+#else
+		int zr = 0;
+		zr = zend_hash_index_del(&EG(regular_list), Z_RES_P(conn_r)->handle);
+#endif
 #else
 		int zr = zend_hash_index_del(&EG(regular_list), Z_RESVAL_P(conn_r));
 #endif
@@ -695,6 +682,7 @@ void __cdecl sqlsrv_conn_dtor(zend_resource *rsrc TSRMLS_DC)
 void __cdecl sqlsrv_conn_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
 #endif
 {
+#if RESOURCE_TABLE_CUSTOM
 	LOG_FUNCTION("sqlsrv_conn_dtor");
 	// get the structure
 	ss_sqlsrv_conn *conn = static_cast<ss_sqlsrv_conn*>(rsrc->ptr);
@@ -706,10 +694,25 @@ void __cdecl sqlsrv_conn_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
 
 	// close the connection itself.
 	core_sqlsrv_close(conn TSRMLS_CC);
-#if PHP_MAJOR_VERSION >= 7
 	sqlsrv_free(rsrc);
-#endif
 	rsrc->ptr = NULL;
+#else
+	LOG_FUNCTION("sqlsrv_conn_dtor");
+
+	// get the structure
+	ss_sqlsrv_conn *conn = static_cast<ss_sqlsrv_conn*>(rsrc->ptr);
+	SQLSRV_ASSERT(conn != NULL, "sqlsrv_conn_dtor: connection was null");
+
+	SET_FUNCTION_NAME(*conn);
+
+	// close all statements associated with the connection.
+	sqlsrv_conn_close_stmts(conn TSRMLS_CC);
+
+	// close the connection itself.
+	core_sqlsrv_close(conn TSRMLS_CC);
+
+	rsrc->ptr = NULL;
+#endif
 }
 
 
@@ -965,7 +968,7 @@ PHP_FUNCTION(sqlsrv_prepare)
 	zval_auto_ptr stmt_z;
 	ALLOC_INIT_ZVAL(stmt_z);
 #endif
-
+	
 	PROCESS_PARAMS(conn, "rs|a!a!", _FN_, 4, &sql, &sql_len, &params_z, &options_z);
 	try {
 		if (options_z && zend_hash_num_elements(Z_ARRVAL_P(options_z)) > 0)
@@ -992,6 +995,7 @@ PHP_FUNCTION(sqlsrv_prepare)
 
 			DIE("sqlsrv_query: sql string was null.");
 		}
+		
 		stmt = static_cast<ss_sqlsrv_stmt*>(core_sqlsrv_create_stmt(conn, core::allocate_stmt<ss_sqlsrv_stmt>,
 			ss_stmt_options_ht, SS_STMT_OPTS,
 			ss_error_handler, NULL TSRMLS_CC));
@@ -1001,6 +1005,7 @@ PHP_FUNCTION(sqlsrv_prepare)
 		mark_params_by_reference(stmt, params_z TSRMLS_CC);
 
 		stmt->prepared = true;
+
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
 		// register the statement with the PHP runtime  
@@ -1041,7 +1046,9 @@ PHP_FUNCTION(sqlsrv_prepare)
 			// stmt->~ss_sqlsrv_stmt(); // what's the point of encapsulation when you have to do this??
 		}
 #if PHP_MAJOR_VERSION >= 7
-
+		if (Z_TYPE_P(return_value) != IS_NULL) {
+			free_stmt_resource(return_value TSRMLS_CC);
+		}
 #else
 		if (Z_TYPE_P(stmt_z) != IS_NULL) {
 			free_stmt_resource(stmt_z TSRMLS_CC);
@@ -1099,11 +1106,17 @@ PHP_FUNCTION(sqlsrv_query)
 
 	ss_sqlsrv_conn* conn = NULL;
 #if PHP_MAJOR_VERSION >= 7
+#if RESOURCE_TABLE_CUSTOM || RESOURCE_TABLE_PERSISTENCY
 	sqlsrv_malloc_auto_ptr<ss_sqlsrv_stmt, true> stmt;
+#else
+	sqlsrv_malloc_auto_ptr<ss_sqlsrv_stmt, false> stmt;
+#endif
 #else
 	sqlsrv_malloc_auto_ptr<ss_sqlsrv_stmt> stmt;
 	zval_auto_ptr stmt_z;
 #endif
+	
+
 	char* sql = NULL;
 	hash_auto_ptr ss_stmt_options_ht;
 	int sql_len = 0;
@@ -1137,11 +1150,11 @@ PHP_FUNCTION(sqlsrv_query)
 
 			DIE("sqlsrv_query: sql string was null.");
 		}
-
+		
 		stmt = static_cast<ss_sqlsrv_stmt*>(core_sqlsrv_create_stmt(conn, core::allocate_stmt<ss_sqlsrv_stmt>,
 			ss_stmt_options_ht, SS_STMT_OPTS,
 			ss_error_handler, NULL TSRMLS_CC));
-
+		
 		stmt->params_z = params_z;
 		if (params_z) {
 			//PHP7 Port
@@ -1158,7 +1171,7 @@ PHP_FUNCTION(sqlsrv_query)
 
 		// execute the statement
 		core_sqlsrv_execute(stmt TSRMLS_CC, sql, sql_len);
-
+		
 #if PHP_MAJOR_VERSION < 7
 		stmt_z = sqlsrv_malloc_zval(stmt_z);
 #endif
@@ -1190,7 +1203,7 @@ PHP_FUNCTION(sqlsrv_query)
 
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		zval_destructor(return_value);
+		//zval_destructor(return_value);
 #else
 		zval_ptr_dtor(&return_value);
 		*return_value_ptr = stmt_z;
@@ -1206,7 +1219,12 @@ PHP_FUNCTION(sqlsrv_query)
 			stmt->conn = NULL;  // tell the statement that it isn't part of the connection so it doesn't try to remove itself
 								// stmt->~ss_sqlsrv_stmt();
 		}
-#if PHP_MAJOR_VERSION < 7
+#if PHP_MAJOR_VERSION >= 7
+		if (return_value) {
+
+			free_stmt_resource(return_value TSRMLS_CC);
+		}
+#else
 		if (stmt_z) {
 
 			free_stmt_resource(stmt_z TSRMLS_CC);
@@ -1261,6 +1279,7 @@ namespace {
 			"already destroyed connection.");
 		SQLSRV_ASSERT((conn->stmts), "sqlsrv_conn_close_stmts: Connection doesn't contain a statement array.");
 #if PHP_MAJOR_VERSION >= 7
+#if RESOURCE_TABLE_CUSTOM
 		for (int i = 0; i < conn->stmts_pointer; i++)
 		{
 			long resource_handle = conn->stmts[i];
@@ -1293,6 +1312,78 @@ namespace {
 		}
 
 		conn->stmts_pointer = 0;
+#else
+		//pre-condition check
+		SQLSRV_ASSERT((conn->handle() != NULL), "sqlsrv_conn_close_stmts: Connection handle is NULL. Trying to destroy an "
+			"already destroyed connection.");
+		SQLSRV_ASSERT((conn->stmts), "sqlsrv_conn_close_stmts: Connection doesn't contain a statement array.");
+
+		// loop through the stmts hash table and destroy each stmt resource so we can close the 
+		// ODBC connection
+		HashPosition pos;
+		for (zend_hash_internal_pointer_reset_ex(conn->stmts, &pos);
+		;
+			zend_hash_move_forward_ex(conn->stmts, &pos)) {
+
+			int type = HASH_KEY_NON_EXISTENT;
+			zend_string *key = NULL;
+			unsigned int key_len = -1;
+			zend_ulong index = -1;
+			type = zend_hash_get_current_key_ex(conn->stmts, &key, &index, &pos);
+
+			if (HASH_KEY_NON_EXISTENT == type)
+			{
+				break;
+			}
+
+
+			long* rsrc_idx_ptr = NULL;
+
+			try {
+				// get the resource id for the next statement created with this connection
+				rsrc_idx_ptr = (long *)core::sqlsrv_zend_hash_get_current_data_ex(conn->stmts, &pos);
+			}
+			catch (core::CoreException&) {
+
+				DIE("sqlsrv_conn_close_stmts: Failed to retrieve a statement resource from the connection");
+			}
+
+			// see if the statement is still valid, and if not skip to the next one
+			// presumably this should never happen because if it's in the list, it should still be valid
+			// by virtue that a statement resource should remove itself from its connection when it is
+			// destroyed in sqlsrv_stmt_dtor.  However, rather than die (assert), we simply skip this resource
+			// and move to the next one.
+			ss_sqlsrv_stmt* stmt = NULL;
+#if RESOURCE_TABLE_PERSISTENCY
+			zend_resource* stmt_resource = (zend_list_find(&EG(persistent_list), *rsrc_idx_ptr, ss_sqlsrv_stmt::descriptor));
+#else
+			zend_resource* stmt_resource = (zend_list_find( &EG(regular_list), *rsrc_idx_ptr, ss_sqlsrv_stmt::descriptor));
+#endif
+			stmt = static_cast<ss_sqlsrv_stmt *>(stmt_resource->ptr);
+
+			if (stmt == NULL ) {
+				LOG(SEV_ERROR, "Non existent statement found in connection.  Statements should remove themselves"
+					" from the connection so this shouldn't be out of sync.");
+				continue;
+			}
+
+			// delete the statement by deleting it from Zend's resource list, which will force its destruction
+			stmt->conn = NULL;
+
+			try {
+
+				// this would call the destructor on the statement.
+				core::sqlsrv_zend_hash_index_del(*conn, &EG(regular_list), *rsrc_idx_ptr TSRMLS_CC);
+			}
+			catch (core::CoreException&) {
+				LOG(SEV_ERROR, "Failed to remove statement resource %1!d! when closing the connection", *rsrc_idx_ptr);
+			}
+		}
+
+		zend_hash_destroy(conn->stmts);
+		FREE_HASHTABLE(conn->stmts);
+		conn->stmts = NULL;
+#endif
 #else
 		// loop through the stmts hash table and destroy each stmt resource so we can close the 
 		// ODBC connection
