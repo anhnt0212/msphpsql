@@ -18,22 +18,21 @@ Thomson Reuters FATCA Technology Team
 
 4. As for our own project, we have currently ported a limited set of SQLSRV functions , which can be seen as below : 
 				
-			sqlsrv_connect
-			sqlsrv_close
-      sqlsrv_client_info
-			sqlsrv_errors
-			sqlsrv_prepare
-			sqlsrv_free_stmt
-			sqlsrv_execute
-			sqlsrv_num_field
-			sqlsrv_next_result
-			sqlsrv_fetch_array ( excluding streams )
-			sqlsrv_configure
-			sqlsrv_query
-			sqlsrv_num_rows
-			sqlsrv_field_metadata
+    sqlsrv_connect
+    sqlsrv_close
+    sqlsrv_errors
+    sqlsrv_prepare
+    sqlsrv_free_stmt
+    sqlsrv_execute
+    sqlsrv_num_field
+    sqlsrv_next_result
+    sqlsrv_fetch_array ( excluding streams )
+    sqlsrv_configure
+    sqlsrv_query
+    sqlsrv_num_rows
+    sqlsrv_field_metadata
+    sqlsrv_client_info
       
-    
 ## Known issues
 
 We currently disabled functionality of sqlsrv_free_stmt and sqlsrv_close as currently there is an issue
