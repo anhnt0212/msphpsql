@@ -361,7 +361,7 @@ PHP_MINIT_FUNCTION(sqlsrv)
 #if RESOURCE_TABLE_CUSTOM 
 	ss_sqlsrv_conn::descriptor = ss::zend_register_list_destructors_ex(NULL, NULL, "SQL Server Connection", module_number);
 #else
-	ss_sqlsrv_conn::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_conn_dtor, NULL, "SQL Server Connection", module_number);
+	ss_sqlsrv_conn::descriptor = ss::zend_register_list_destructors_ex(NULL, NULL, "SQL Server Connection", module_number); // 666
 #endif
 #else
 	ss_sqlsrv_conn::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_conn_dtor, NULL, "SQL Server Connection", module_number);
@@ -378,7 +378,7 @@ PHP_MINIT_FUNCTION(sqlsrv)
 #if RESOURCE_TABLE_CUSTOM 
 	ss_sqlsrv_stmt::descriptor = ss::zend_register_list_destructors_ex(NULL, NULL, "SQL Server Statement", module_number);
 #else
-	ss_sqlsrv_stmt::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_stmt_dtor, NULL, "SQL Server Statement", module_number);
+	ss_sqlsrv_stmt::descriptor = ss::zend_register_list_destructors_ex(NULL, NULL, "SQL Server Statement", module_number); //666
 #endif
 #else
     ss_sqlsrv_stmt::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_stmt_dtor, NULL, "SQL Server Statement", module_number );

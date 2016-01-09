@@ -288,16 +288,17 @@ PHP_FUNCTION( sqlsrv_execute )
 
 		PROCESS_PARAMS(stmt, "r", _FN_, 0);
 
-        CHECK_CUSTOM_ERROR(( !stmt->prepared ), stmt, SS_SQLSRV_ERROR_STATEMENT_NOT_PREPARED ) {
+        CHECK_CUSTOM_ERROR(( !stmt->prepared ), stmt, SS_SQLSRV_ERROR_STATEMENT_NOT_PREPARED ) 
+		{
             throw ss::SSException();
         }
 
         // prepare for the next execution by flushing anything remaining in the result set
-        if( stmt->executed ) {
-
+        if( stmt->executed ) 
+		{
             // to prepare to execute the next statement, we skip any remaining results (and skip parameter finalization too)
-            while( stmt->past_next_result_end == false ) {
-
+            while( stmt->past_next_result_end == false ) 
+			{
                 core_sqlsrv_next_result( stmt TSRMLS_CC, false, false );
             }
         }
@@ -392,7 +393,6 @@ PHP_FUNCTION( sqlsrv_fetch )
 PHP_FUNCTION( sqlsrv_fetch_array )
 {
     LOG_FUNCTION( "sqlsrv_fetch_array" );
-	
     ss_sqlsrv_stmt* stmt = NULL;
 #if PHP_MAJOR_VERSION >= 7
     zend_long fetch_type = SQLSRV_FETCH_BOTH; // default value for parameter if one isn't supplied
@@ -1665,41 +1665,54 @@ void __cdecl sqlsrv_stmt_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
 	
 	// get the structure
 	ss_sqlsrv_stmt *stmt = static_cast<ss_sqlsrv_stmt*>(rsrc->ptr);
-	//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+	if (stmt != nullptr)
+	{
+#endif
+
+		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
 #if RESOURCE_TABLE_PERSISTENCY || RESOURCE_TABLE_CUSTOM 
-	bool stmt_resource_persistency = true;
+		bool stmt_resource_persistency = true;
 #else
-	bool stmt_resource_persistency = false;
+		bool stmt_resource_persistency = false;
 #endif
 #if RESOURCE_TABLE_CUSTOM
-	clean_hashtable((stmt->param_input_strings), stmt_resource_persistency);
-	clean_hashtable((stmt->param_streams), stmt_resource_persistency);
-	clean_hashtable((stmt->param_datetime_buffers), stmt_resource_persistency);
-	clean_hashtable((stmt->output_params), stmt_resource_persistency);
-	clean_hashtable((stmt->field_cache), stmt_resource_persistency);
-	stmt->~ss_sqlsrv_stmt();
-	sqlsrv_free(stmt, stmt_resource_persistency);
-	sqlsrv_free(rsrc);
+		clean_hashtable((stmt->param_input_strings), stmt_resource_persistency);
+		clean_hashtable((stmt->param_streams), stmt_resource_persistency);
+		clean_hashtable((stmt->param_datetime_buffers), stmt_resource_persistency);
+		clean_hashtable((stmt->output_params), stmt_resource_persistency);
+		clean_hashtable((stmt->field_cache), stmt_resource_persistency);
+		stmt->~ss_sqlsrv_stmt();
+		sqlsrv_free(stmt, stmt_resource_persistency);
+		sqlsrv_free(rsrc);
 #else
-	
-	if (stmt->conn) {
 
-		
-		int zr = static_cast<ss_sqlsrv_conn*>(stmt->conn)->remove_statement_handle((zend_ulong)stmt->conn_index);
-		if (zr == FAILURE) {
-			LOG(SEV_ERROR, "Failed to remove statement reference from the connection");
+		if (stmt->conn != nullptr)
+		{
+
+
+			int zr = static_cast<ss_sqlsrv_conn*>(stmt->conn)->remove_statement_handle((zend_ulong)stmt->conn_index);
+			if (zr == FAILURE) {
+				LOG(SEV_ERROR, "Failed to remove statement reference from the connection");
+			}
+
+			stmt->conn = nullptr;
 		}
-	}
 
-	stmt->~ss_sqlsrv_stmt();
-	sqlsrv_free(stmt);
-	rsrc->ptr = NULL;
+		stmt->~ss_sqlsrv_stmt();
+		sqlsrv_free(stmt);
+		stmt = nullptr;
+		rsrc->ptr = NULL;
 #endif
 #else
-	stmt->~ss_sqlsrv_stmt();
-	sqlsrv_free(stmt);
+		stmt->~ss_sqlsrv_stmt();
+		sqlsrv_free(stmt);
 #endif	
+
+#if PHP_MAJOR_VERSION >= 7
+	}
+#endif
 }
 
 // sqlsrv_free_stmt( resource $stmt )
@@ -1725,7 +1738,12 @@ void __cdecl sqlsrv_stmt_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
 PHP_FUNCTION( sqlsrv_free_stmt )
 {
 	//PHP7 Port
-#if PHP_MAJOR_VERSION < 7
+#if PHP_MAJOR_VERSION >= 7
+#if RESOURCE_TABLE_CUSTOM == 0
+	//666 
+	RETURN_TRUE;
+#endif
+#else
 	SQLSRV_UNUSED(return_value_used);
 	SQLSRV_UNUSED(this_ptr);
 	SQLSRV_UNUSED(return_value_ptr);
@@ -1788,7 +1806,11 @@ PHP_FUNCTION( sqlsrv_free_stmt )
         // delete the resource from Zend's master list, which will trigger the statement's destructor
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
+		// We didn`t register our resource dtors  to avoid CV optimisations
+		// therefore here we clean em manually , look at sqlsrv_close which does same thing for conn objects
+		//666 sqlsrv_stmt_dtor(Z_RES_P(stmt_r));
 		int zr = core::sqlsrv_zend_hash_index_del(&(RESOURCE_TABLE), Z_RES_P(stmt_r)->handle);
+		
 
         if( zr == FAILURE ) 
 		{
@@ -1832,8 +1854,8 @@ void stmt_option_scrollable:: operator()( sqlsrv_stmt* stmt, stmt_option const* 
         cursor_type = SQL_CURSOR_STATIC;
     }
     
-    else if( !_stricmp( scroll_type, SSCursorTypes::QUERY_OPTION_SCROLLABLE_DYNAMIC )) {
-
+    else if( !_stricmp( scroll_type, SSCursorTypes::QUERY_OPTION_SCROLLABLE_DYNAMIC )) 
+	{
         cursor_type = SQL_CURSOR_DYNAMIC;
     }
 

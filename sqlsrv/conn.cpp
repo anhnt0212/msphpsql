@@ -17,8 +17,6 @@
 //  IN THE SOFTWARE.
 //---------------------------------------------------------------------------------------------------------------------------------
 
-
-
 #include "zend_utility.h"
 #include "php_sqlsrv.h"
 #include <psapi.h>
@@ -75,8 +73,8 @@ namespace {
 #else
 				core::sqlsrv_zend_hash_get_current_data(*conn, g_ss_encodings_ht, (void**)&ss_encoding TSRMLS_CC);
 #endif
-
-				if (!_strnicmp(encoding, ss_encoding->m_iana, encoding_len)) {
+				if (!_strnicmp(encoding, ss_encoding->m_iana, encoding_len)) 
+				{
 
 					if (ss_encoding->m_not_for_connection) {
 						THROW_SS_ERROR(conn, SS_SQLSRV_ERROR_CONNECT_ILLEGAL_ENCODING, encoding);
@@ -449,7 +447,8 @@ PHP_FUNCTION(sqlsrv_connect)
 	// get the server name and connection options
 	int result = zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s|a", &server, &server_len, &options_z);
 
-	CHECK_CUSTOM_ERROR((result == FAILURE), *g_henv_cp, SS_SQLSRV_ERROR_INVALID_FUNCTION_PARAMETER, "sqlsrv_connect") {
+	CHECK_CUSTOM_ERROR((result == FAILURE), *g_henv_cp, SS_SQLSRV_ERROR_INVALID_FUNCTION_PARAMETER, "sqlsrv_connect") 
+	{
 		RETURN_FALSE;
 	}
 
@@ -457,7 +456,8 @@ PHP_FUNCTION(sqlsrv_connect)
 	hash_auto_ptr stmts;
 	ss_sqlsrv_conn* conn = NULL;
 
-	try {
+	try 
+	{
 
 		// Initialize the options array to be passed to the core layer
 		sqlsrv_malloc_hashtable(&ss_conn_options_ht);
@@ -587,7 +587,12 @@ PHP_FUNCTION(sqlsrv_close)
 {
 	LOG_FUNCTION("sqlsrv_close");
 	//PHP7 Port
-#if PHP_MAJOR_VERSION < 7
+#if PHP_MAJOR_VERSION >= 7
+#if RESOURCE_TABLE_CUSTOM == 0
+	//666 
+	RETURN_TRUE;
+#endif
+#else
 	SQLSRV_UNUSED(return_value_used);
 	SQLSRV_UNUSED(this_ptr);
 	SQLSRV_UNUSED(return_value_ptr);
@@ -647,7 +652,13 @@ PHP_FUNCTION(sqlsrv_close)
 		int zr = core::sqlsrv_zend_hash_index_del(&RESOURCE_TABLE, Z_RES_P(conn_r)->handle);
 #else
 		int zr = 0;
+
+		// We didn`t register our resource dtors  to avoid CV optimisations
+		// therefore here we clean em manually , look at sqlsrv_free_stmt which does the same thing for stmt objects
+		//666 sqlsrv_conn_dtor(Z_RES_P(conn_r));
+
 		zr = zend_hash_index_del(&EG(regular_list), Z_RES_P(conn_r)->handle);
+		
 #endif
 #else
 		int zr = zend_hash_index_del(&EG(regular_list), Z_RESVAL_P(conn_r));
@@ -701,17 +712,29 @@ void __cdecl sqlsrv_conn_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
 
 	// get the structure
 	ss_sqlsrv_conn *conn = static_cast<ss_sqlsrv_conn*>(rsrc->ptr);
-	SQLSRV_ASSERT(conn != NULL, "sqlsrv_conn_dtor: connection was null");
 
-	SET_FUNCTION_NAME(*conn);
+#if PHP_MAJOR_VERSION >= 7
+	if (conn != nullptr)
+	{
+#endif
+		SQLSRV_ASSERT(conn != NULL, "sqlsrv_conn_dtor: connection was null");
 
-	// close all statements associated with the connection.
-	sqlsrv_conn_close_stmts(conn TSRMLS_CC);
+		SET_FUNCTION_NAME(*conn);
 
-	// close the connection itself.
-	core_sqlsrv_close(conn TSRMLS_CC);
+		// close all statements associated with the connection.
+		sqlsrv_conn_close_stmts(conn TSRMLS_CC);
 
-	rsrc->ptr = NULL;
+		// close the connection itself.
+		core_sqlsrv_close(conn TSRMLS_CC);
+
+#if PHP_MAJOR_VERSION >= 7
+		conn = nullptr;
+#endif
+
+		rsrc->ptr = NULL;
+#endif
+#if PHP_MAJOR_VERSION >= 7
+	}
 #endif
 }
 
@@ -838,10 +861,8 @@ PHP_FUNCTION(sqlsrv_rollback)
 // the version of this extension.
 // Parameters:
 // $conn - The connection resource by which the client and server are connected.
-
 PHP_FUNCTION(sqlsrv_client_info)
 {
-	non_supported_function("sqlsrv_client_info");
 	//PHP7 Port
 #if PHP_MAJOR_VERSION < 7
 	SQLSRV_UNUSED(return_value_used);
@@ -1241,27 +1262,35 @@ PHP_FUNCTION(sqlsrv_query)
 
 void free_stmt_resource(zval* stmt_z TSRMLS_DC)
 {
-	//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-	int zr = core::sqlsrv_zend_hash_index_del(&RESOURCE_TABLE, Z_RES_P(stmt_z)->handle);
-#else
-	int zr = zend_hash_index_del(&EG(regular_list), Z_RESVAL_P(stmt_z));
+	if (stmt_z != nullptr)
+	{
 #endif
-	if (zr == FAILURE) {
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		LOG(SEV_ERROR, "Failed to remove stmt resource %1!d!", Z_RES_P(stmt_z)->handle);
+		int zr = core::sqlsrv_zend_hash_index_del(&RESOURCE_TABLE, Z_RES_P(stmt_z)->handle);
 #else
-		LOG(SEV_ERROR, "Failed to remove stmt resource %1!d!", Z_RESVAL_P(stmt_z));
+		int zr = zend_hash_index_del(&EG(regular_list), Z_RESVAL_P(stmt_z));
 #endif
-	}
-
-	null_zval(stmt_z);
-	//PHP7 Port
+		if (zr == FAILURE) {
+			//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-	zval_destructor(stmt_z);
+			LOG(SEV_ERROR, "Failed to remove stmt resource %1!d!", Z_RES_P(stmt_z)->handle);
 #else
-	zval_ptr_dtor(&stmt_z);
+			LOG(SEV_ERROR, "Failed to remove stmt resource %1!d!", Z_RESVAL_P(stmt_z));
+#endif
+		}
+
+		null_zval(stmt_z);
+		//PHP7 Port
+#if PHP_MAJOR_VERSION >= 7
+		zval_destructor(stmt_z);
+#else
+		zval_ptr_dtor(&stmt_z);
+#endif
+
+#if PHP_MAJOR_VERSION >= 7
+	}
 #endif
 }
 
@@ -1359,24 +1388,24 @@ namespace {
 #else
 			zend_resource* stmt_resource = (zend_list_find( &EG(regular_list), *rsrc_idx_ptr, ss_sqlsrv_stmt::descriptor));
 #endif
-			stmt = static_cast<ss_sqlsrv_stmt *>(stmt_resource->ptr);
+			if (stmt_resource != nullptr)
+			{
+				stmt = static_cast<ss_sqlsrv_stmt *>(stmt_resource->ptr);
 
-			if (stmt == NULL ) {
-				LOG(SEV_ERROR, "Non existent statement found in connection.  Statements should remove themselves"
-					" from the connection so this shouldn't be out of sync.");
-				continue;
-			}
+				if (stmt == NULL) {
+					LOG(SEV_ERROR, "Non existent statement found in connection.  Statements should remove themselves"
+						" from the connection so this shouldn't be out of sync.");
+					continue;
+				}
 
-			// delete the statement by deleting it from Zend's resource list, which will force its destruction
-			stmt->conn = NULL;
-
-			try {
-
-				// this would call the destructor on the statement.
-				core::sqlsrv_zend_hash_index_del(*conn, &EG(regular_list), *rsrc_idx_ptr TSRMLS_CC);
-			}
-			catch (core::CoreException&) {
-				LOG(SEV_ERROR, "Failed to remove statement resource %1!d! when closing the connection", *rsrc_idx_ptr);
+				try {
+					//666 sqlsrv_stmt_dtor(stmt_resource);
+					// this would call the destructor on the statement.
+					core::sqlsrv_zend_hash_index_del(*conn, &EG(regular_list), *rsrc_idx_ptr TSRMLS_CC);
+				}
+				catch (core::CoreException&) {
+					LOG(SEV_ERROR, "Failed to remove statement resource %1!d! when closing the connection", *rsrc_idx_ptr);
+				}
 			}
 		}
 

@@ -337,7 +337,7 @@ void core_sqlsrv_rollback( sqlsrv_conn* conn TSRMLS_DC )
 void core_sqlsrv_close( sqlsrv_conn* conn TSRMLS_DC )
 {
     // if the connection wasn't successful, just return.
-    if( conn == NULL )
+    if( conn == nullptr )
         return;
 
     try {
@@ -511,7 +511,6 @@ void core_sqlsrv_get_client_info( sqlsrv_conn* conn, __out zval *client_info TSR
         core::SQLGetInfo( conn, SQL_DRIVER_VER, buffer, INFO_BUFFER_LEN, &buffer_len TSRMLS_CC );
         core::sqlsrv_add_assoc_string( *conn, client_info, "DriverVer", buffer, 0 /*duplicate*/ TSRMLS_CC );
         buffer.transferred();
-    
     }
 
     catch( core::CoreException& ) {

@@ -10,11 +10,11 @@ Thomson Reuters FATCA Technology Team
 
 ## List of supported functionality and features
 
-1. Currently we are not porting the PDO_SQLSRV extension and targeting only the SQLSRV extension.
+1. We are not porting the PDO_SQLSRV extension and targeting only the SQLSRV extension.
 
-2. Currently we are only supporting non-ZTS mode of PHP7.
+2. We are only supporting non-ZTS mode of PHP7.
 
-3. Currently we are supporting only x86.
+3. We are supporting only x86.
 
 4. As for our own project, we have currently ported a limited set of SQLSRV functions , which can be seen as below : 
 				
@@ -26,12 +26,18 @@ Thomson Reuters FATCA Technology Team
 			sqlsrv_execute
 			sqlsrv_num_field
 			sqlsrv_next_result
-			sqlsrv_fetch_array
+			sqlsrv_fetch_array ( excluding streams )
 			sqlsrv_configure
 			sqlsrv_query
 			sqlsrv_num_rows
 			sqlsrv_field_metadata
-      
+      sqlsrv_client_info
+    
+## Known issues
+
+We currently disabled functionality of sqlsrv_free_stmt and sqlsrv_close as currently there is an issue
+with freeing resources in EG(regular_list). We will fix it soon.
+    
 ## Remarks
 
 Official sqlsrv_num_rows documentation on http://php.net/manual/en/function.sqlsrv-num-rows.php is misleading.

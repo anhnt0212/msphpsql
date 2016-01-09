@@ -222,7 +222,11 @@ struct ss_sqlsrv_conn : sqlsrv_conn
 #if RESOURCE_TABLE_CUSTOM == 0
 	int remove_statement_handle(zend_ulong index)
 	{
-		return ::zend_hash_index_del(stmts, index);
+		if (stmts )
+		{
+			  return ::zend_hash_index_del(stmts, index);
+		}
+		return -1;
 	}
 #endif
 };
@@ -723,13 +727,23 @@ inline H* process_params( INTERNAL_FUNCTION_PARAMETERS, char const* param_spec, 
         h = static_cast<H*>( zend_fetch_resource( &rsrc TSRMLS_CC, -1, H::resource_name, NULL, 1, H::descriptor ));
 #endif
         
-        CHECK_CUSTOM_ERROR(( h == NULL ), &error_ctx, SS_SQLSRV_ERROR_INVALID_FUNCTION_PARAMETER, calling_func ) 
+		// In PHP7 CV optimisations can cause the resources to be predeleted before sqlsrv_close call
+		// therefore no need to check against nullptr
+#if PHP_MAJOR_VERSION >= 7
+		if (h != nullptr)
+		{
+			h->set_func(calling_func);
+		}
+#else
+		
+		CHECK_CUSTOM_ERROR((h == NULL), &error_ctx, SS_SQLSRV_ERROR_INVALID_FUNCTION_PARAMETER, calling_func)
 		{
 
-            throw ss::SSException();
-        }
+			throw ss::SSException();
+		}
 
-        h->set_func( calling_func );
+		h->set_func(calling_func);
+#endif
 
         return h;
     }
