@@ -20,6 +20,7 @@ Thomson Reuters FATCA Technology Team
 				
 			sqlsrv_connect
 			sqlsrv_close
+      sqlsrv_client_info
 			sqlsrv_errors
 			sqlsrv_prepare
 			sqlsrv_free_stmt
@@ -31,7 +32,7 @@ Thomson Reuters FATCA Technology Team
 			sqlsrv_query
 			sqlsrv_num_rows
 			sqlsrv_field_metadata
-      sqlsrv_client_info
+      
     
 ## Known issues
 
