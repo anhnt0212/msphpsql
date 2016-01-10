@@ -35,8 +35,8 @@ Thomson Reuters FATCA Technology Team
     
 ## Remarks
 
-Official sqlsrv_num_rows documentation on http://php.net/manual/en/function.sqlsrv-num-rows.php is misleading.
-If you look at SQL Native Client documentation on https://msdn.microsoft.com/en-us/library/ms711835(v=vs.85).aspx 
+Official sqlsrv_num_rows documentation on http://php.net/manual/en/function.sqlsrv-num-rows.php might be misleading.
+If you look at the SQL Native Client documentation on https://msdn.microsoft.com/en-us/library/ms711835(v=vs.85).aspx 
 , sqlsrv_num_rows in fact returns the number of rows affected.
 
 ## Prerequisites 
@@ -64,7 +64,7 @@ For your questions, please contact akin.ocal@thomsonreuters.com
 
 2. We are using static memory with std::array for error and warning reporting : core_errors.h 
 
-3. We added flags inside php_sqlsrv.h to switch between different resource managers : EG(regular_list) and a custom global one which is not being touched by PHP7 garbage collector. As we are still workin for the custom manual resource manager, it is not advised to turn the custom one on for production environments.
+3. We added flags inside php_sqlsrv.h to switch between different resource managers : EG(regular_list) and a custom global one which is not being touched by PHP7 garbage collector. As we are still working for the custom manual resource manager, it is not advised to turn the custom one on for production environments.
 
 4. We also have added a new file ( zend_utility.h ) to the project which contains a few macros and functions for porting considerations and also for exploring new PHP7 engine.
 
