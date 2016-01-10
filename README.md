@@ -18,20 +18,20 @@ Thomson Reuters FATCA Technology Team
 
 4. As for our own project, we have currently ported a limited set of SQLSRV functions , which can be seen as below : 
 				
-    sqlsrv_connect
-    sqlsrv_close
-    sqlsrv_errors
-    sqlsrv_prepare
-    sqlsrv_free_stmt
-    sqlsrv_execute
-    sqlsrv_num_field
-    sqlsrv_next_result
-    sqlsrv_fetch_array ( excluding streams )
-    sqlsrv_configure
-    sqlsrv_query
-    sqlsrv_num_rows
-    sqlsrv_field_metadata
-    sqlsrv_client_info
+    1. sqlsrv_connect
+    2. sqlsrv_close
+    3. sqlsrv_errors
+    4. sqlsrv_prepare
+    5. sqlsrv_free_stmt
+    6. sqlsrv_execute
+    7. sqlsrv_num_field
+    8. sqlsrv_next_result
+    9. sqlsrv_fetch_array ( excluding streams )
+    10. sqlsrv_configure
+    11. sqlsrv_query
+    12. sqlsrv_num_rows
+    13. sqlsrv_field_metadata
+    14. sqlsrv_client_info
     
 ## Remarks
 
@@ -56,8 +56,6 @@ For your questions, please contact akin.ocal@thomsonreuters.com
 
 ## Source code information
 
-As mentioned above , this project also includes another unofficial patch. Other than that you can search for "//PHP7 Port" in the project to see the PHP7 considerations.
-Other main changes are :
 
 1. We centralised all memory allocations and frees in new core_memory.h file. We also added CRT debugging features to the same header file such as programatic
    memory breakpoints, CRT memory function hooks and CRT debug heap reporting. You can turn these on by adding SQLSRV_MEM_DEBUG=1 and SQLSRV_HOOK_CRT_MALLOC=1 to your preprocessor.
