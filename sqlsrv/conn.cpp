@@ -586,13 +586,8 @@ PHP_FUNCTION(sqlsrv_begin_transaction)
 PHP_FUNCTION(sqlsrv_close)
 {
 	LOG_FUNCTION("sqlsrv_close");
-	//PHP7 Port
-#if PHP_MAJOR_VERSION >= 7
-#if RESOURCE_TABLE_CUSTOM == 0
-	//666 
-	RETURN_TRUE;
-#endif
-#else
+
+#if PHP_MAJOR_VERSION < 7
 	SQLSRV_UNUSED(return_value_used);
 	SQLSRV_UNUSED(this_ptr);
 	SQLSRV_UNUSED(return_value_ptr);
@@ -648,18 +643,8 @@ PHP_FUNCTION(sqlsrv_close)
 
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-#if RESOURCE_TABLE_CUSTOM
-		int zr = core::sqlsrv_zend_hash_index_del(&RESOURCE_TABLE, Z_RES_P(conn_r)->handle);
-#else
 		int zr = 0;
-
-		// We didn`t register our resource dtors  to avoid CV optimisations
-		// therefore here we clean em manually , look at sqlsrv_free_stmt which does the same thing for stmt objects
-		//666 sqlsrv_conn_dtor(Z_RES_P(conn_r));
-
-		zr = zend_hash_index_del(&EG(regular_list), Z_RES_P(conn_r)->handle);
-		
-#endif
+		zr = ss::remove_resource(sqlsrv_conn_dtor, Z_RES_P(conn_r), &RESOURCE_TABLE);
 #else
 		int zr = zend_hash_index_del(&EG(regular_list), Z_RESVAL_P(conn_r));
 #endif
@@ -717,6 +702,7 @@ void __cdecl sqlsrv_conn_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
 	if (conn != nullptr)
 	{
 #endif
+
 		SQLSRV_ASSERT(conn != NULL, "sqlsrv_conn_dtor: connection was null");
 
 		SET_FUNCTION_NAME(*conn);
@@ -724,9 +710,9 @@ void __cdecl sqlsrv_conn_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
 		// close all statements associated with the connection.
 		sqlsrv_conn_close_stmts(conn TSRMLS_CC);
 
+
 		// close the connection itself.
 		core_sqlsrv_close(conn TSRMLS_CC);
-
 #if PHP_MAJOR_VERSION >= 7
 		conn = nullptr;
 #endif
@@ -1030,7 +1016,7 @@ PHP_FUNCTION(sqlsrv_prepare)
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
 		// register the statement with the PHP runtime  
-		zend_resource* res = ss::zend_register_resource(stmt, ss_sqlsrv_stmt::descriptor, ss_sqlsrv_stmt::resource_name);
+		zend_resource* res = ss::zend_register_resource(stmt, ss_sqlsrv_stmt::descriptor, ss_sqlsrv_stmt::resource_name, true);
 		// store the resource id with the connection so the connection 
 		// can release this statement when it closes.
 		int next_index = conn->add_statement_handle(res->handle);
@@ -1127,7 +1113,7 @@ PHP_FUNCTION(sqlsrv_query)
 
 	ss_sqlsrv_conn* conn = NULL;
 #if PHP_MAJOR_VERSION >= 7
-#if RESOURCE_TABLE_CUSTOM || RESOURCE_TABLE_PERSISTENCY
+#if RESOURCE_TABLE_CUSTOM
 	sqlsrv_malloc_auto_ptr<ss_sqlsrv_stmt, true> stmt;
 #else
 	sqlsrv_malloc_auto_ptr<ss_sqlsrv_stmt, false> stmt;
@@ -1136,7 +1122,6 @@ PHP_FUNCTION(sqlsrv_query)
 	sqlsrv_malloc_auto_ptr<ss_sqlsrv_stmt> stmt;
 	zval_auto_ptr stmt_z;
 #endif
-	
 
 	char* sql = NULL;
 	hash_auto_ptr ss_stmt_options_ht;
@@ -1200,7 +1185,7 @@ PHP_FUNCTION(sqlsrv_query)
 		// register the statement with the PHP runtime 
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		zend_resource* res = ss::zend_register_resource(stmt, ss_sqlsrv_stmt::descriptor, ss_sqlsrv_stmt::resource_name TSRMLS_CC);
+		zend_resource* res = ss::zend_register_resource(stmt, ss_sqlsrv_stmt::descriptor, ss_sqlsrv_stmt::resource_name, true TSRMLS_CC);
 		RETVAL_RES(res);
 #else
 		ss::zend_register_resource(stmt_z, stmt, ss_sqlsrv_stmt::descriptor, ss_sqlsrv_stmt::resource_name TSRMLS_CC);
@@ -1383,11 +1368,7 @@ namespace {
 			// destroyed in sqlsrv_stmt_dtor.  However, rather than die (assert), we simply skip this resource
 			// and move to the next one.
 			ss_sqlsrv_stmt* stmt = NULL;
-#if RESOURCE_TABLE_PERSISTENCY
-			zend_resource* stmt_resource = (zend_list_find(&EG(persistent_list), *rsrc_idx_ptr, ss_sqlsrv_stmt::descriptor));
-#else
-			zend_resource* stmt_resource = (zend_list_find( &EG(regular_list), *rsrc_idx_ptr, ss_sqlsrv_stmt::descriptor));
-#endif
+			zend_resource* stmt_resource = (zend_list_find(&RESOURCE_TABLE, *rsrc_idx_ptr, ss_sqlsrv_stmt::descriptor));
 			if (stmt_resource != nullptr)
 			{
 				stmt = static_cast<ss_sqlsrv_stmt *>(stmt_resource->ptr);
@@ -1399,9 +1380,7 @@ namespace {
 				}
 
 				try {
-					//666 sqlsrv_stmt_dtor(stmt_resource);
-					// this would call the destructor on the statement.
-					core::sqlsrv_zend_hash_index_del(*conn, &EG(regular_list), *rsrc_idx_ptr TSRMLS_CC);
+					ss::remove_resource(sqlsrv_stmt_dtor, stmt_resource, &RESOURCE_TABLE, true);
 				}
 				catch (core::CoreException&) {
 					LOG(SEV_ERROR, "Failed to remove statement resource %1!d! when closing the connection", *rsrc_idx_ptr);

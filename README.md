@@ -32,11 +32,6 @@ Thomson Reuters FATCA Technology Team
     sqlsrv_num_rows
     sqlsrv_field_metadata
     sqlsrv_client_info
-      
-## Known issues
-
-We currently disabled functionality of sqlsrv_free_stmt and sqlsrv_close as currently there is an issue
-with freeing resources in EG(regular_list). We will fix it soon.
     
 ## Remarks
 
@@ -54,7 +49,7 @@ https://www.microsoft.com/en-us/download/details.aspx?id=48145
 The instructions are the same as those for the original driver , which can be found here :
 https://github.com/Azure/msphpsql
 The only different thing is you will need VS20015. You can also find the build DLL and the pdb file
-in "binaries_non_zts_x86" directory.
+in "binaries_php7_non_zts_x86" directory.
 
 ## Contact
 For your questions, please contact akin.ocal@thomsonreuters.com
@@ -71,7 +66,7 @@ Other main changes are :
 
 2. We are using static memory with std::array for error and warning reporting : core_errors.h 
 
-3. We added flags inside php_sqlsrv.h to switch between different resource managers : EG(regular_list), EG(persistent_list) and a custom global one. For production environments, the suggested one is EG(regular_list).
+3. We added flags inside php_sqlsrv.h to switch between different resource managers : EG(regular_list) and a custom global one which is not being touched by PHP7 garbage collector. As we are still workin for the custom manual resource manager, it is not advised to turn the custom one on for production environments.
 
 4. We also have added a new file ( zend_utility.h ) to the project which contains a few macros and functions for porting considerations and also for exploring new PHP7 engine.
 

@@ -317,8 +317,8 @@ PHP_MINIT_FUNCTION(sqlsrv)
 
 #if PHP_MAJOR_VERSION >= 7
 #if RESOURCE_TABLE_CUSTOM
-	//resource_table = sqlsrv_malloc_hashtable(RESOURCE_TABLE, RESOURCE_TABLE_PERSISTENCY ? true : false);
-	zend_hash_init(&(RESOURCE_TABLE), RESOURCE_TABLE_INITIAL_SIZE, NULL ,  sqlsrv_resource_list_dtor , RESOURCE_TABLE_PERSISTENCY ? true : false);
+	//resource_table = sqlsrv_malloc_hashtable(RESOURCE_TABLE, true);
+	zend_hash_init(&(RESOURCE_TABLE), RESOURCE_TABLE_INITIAL_SIZE, NULL ,  sqlsrv_resource_list_dtor , true);
 	//mark_hashtable_as_initialised(&(RESOURCE_TABLE));
 #endif
 #endif
@@ -361,7 +361,7 @@ PHP_MINIT_FUNCTION(sqlsrv)
 #if RESOURCE_TABLE_CUSTOM 
 	ss_sqlsrv_conn::descriptor = ss::zend_register_list_destructors_ex(NULL, NULL, "SQL Server Connection", module_number);
 #else
-	ss_sqlsrv_conn::descriptor = ss::zend_register_list_destructors_ex(NULL, NULL, "SQL Server Connection", module_number); // 666
+	ss_sqlsrv_conn::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_conn_dtor, NULL, "SQL Server Connection", module_number);
 #endif
 #else
 	ss_sqlsrv_conn::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_conn_dtor, NULL, "SQL Server Connection", module_number);
@@ -378,7 +378,7 @@ PHP_MINIT_FUNCTION(sqlsrv)
 #if RESOURCE_TABLE_CUSTOM 
 	ss_sqlsrv_stmt::descriptor = ss::zend_register_list_destructors_ex(NULL, NULL, "SQL Server Statement", module_number);
 #else
-	ss_sqlsrv_stmt::descriptor = ss::zend_register_list_destructors_ex(NULL, NULL, "SQL Server Statement", module_number); //666
+	ss_sqlsrv_stmt::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_stmt_dtor, NULL, "SQL Server Statement", module_number);
 #endif
 #else
     ss_sqlsrv_stmt::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_stmt_dtor, NULL, "SQL Server Statement", module_number );

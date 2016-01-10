@@ -46,15 +46,17 @@ namespace // Following MS`s anonymous namespace usage, not to pollute the global
 inline zend_resource* zend_list_find(HashTable* resources, long res_handle, int type)
 {
 	zend_resource* ret = NULL;
-
 	auto temp = resources->arData[res_handle].val.value.res;
 
-	if( temp )
+	if (!temp)
 	{
-		if (temp->type == type)
-		{
-			ret = temp;
-		}
+		php_error(E_ERROR, "SQLSRV can not find %d type resource with handle %d ", type , res_handle);
+		return ret;
+	}
+
+	if (temp->type == type)
+	{
+		ret = temp;
 	}
 
 	return ret;
@@ -134,7 +136,6 @@ inline int dump_zend_array(HashTable* arr)
 {
 	int i = 0;
 	zend_hash_internal_pointer_reset(arr);
-	auto test = zend_hash_has_more_elements(arr);
 
 	for (zend_hash_internal_pointer_reset(arr);
 	zend_hash_has_more_elements(arr) == SUCCESS;

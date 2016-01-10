@@ -332,7 +332,7 @@ struct sqlsrv_error : public sqlsrv_error_const
 
 // allocator that uses the zend memory manager to manage memory
 // this allows us to use STL classes that still work with Zend objects
-#if RESOURCE_TABLE_PERSISTENCY || RESOURCE_TABLE_CUSTOM 
+#if RESOURCE_TABLE_PERSISTENCY
 template<typename T, bool persistency = true>
 #else
 template<typename T, bool persistency = false>
@@ -1686,8 +1686,8 @@ namespace core {
     {
         SQLRETURN r;
         SQLSMALLINT num_cols;
+		auto test = stmt->handle();
         r = ::SQLNumResultCols( stmt->handle(), &num_cols );
-        
         CHECK_SQL_ERROR_OR_WARNING( r, stmt ) {
             throw CoreException();
         }
@@ -2018,7 +2018,7 @@ namespace core {
 	template <typename Statement>
 	sqlsrv_stmt* allocate_stmt( sqlsrv_conn* conn, SQLHANDLE h, error_callback e, void* driver TSRMLS_DC)
 	{
-#if RESOURCE_TABLE_CUSTOM || RESOURCE_TABLE_PERSISTENCY
+#if RESOURCE_TABLE_CUSTOM
 		return new ( sqlsrv_malloc( sizeof( Statement ), true)) Statement( conn, h, e, driver TSRMLS_CC);
 #else
 		return new (sqlsrv_malloc(sizeof(Statement), false)) Statement(conn, h, e, driver TSRMLS_CC);
@@ -2029,7 +2029,7 @@ namespace core {
 	sqlsrv_conn* allocate_conn( SQLHANDLE h, error_callback e, void* driver TSRMLS_DC)
 	{
 #if PHP_MAJOR_VERSION >= 7
-#if RESOURCE_TABLE_CUSTOM || RESOURCE_TABLE_PERSISTENCY
+#if RESOURCE_TABLE_CUSTOM
 		return new ( sqlsrv_malloc( sizeof( Connection ), true)) Connection( h, e, driver TSRMLS_CC);
 #else
 

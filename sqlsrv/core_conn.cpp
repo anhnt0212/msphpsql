@@ -358,7 +358,7 @@ void core_sqlsrv_close( sqlsrv_conn* conn TSRMLS_DC )
     // free the connection handle
     conn->invalidate();
 #if PHP_MAJOR_VERSION >= 7
-#if RESOURCE_TABLE_CUSTOM || RESOURCE_TABLE_PERSISTENCY
+#if RESOURCE_TABLE_CUSTOM
 	sqlsrv_free(conn, true);
 #else
 	sqlsrv_free(conn);

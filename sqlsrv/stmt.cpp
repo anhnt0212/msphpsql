@@ -1660,7 +1660,6 @@ void __cdecl sqlsrv_stmt_dtor(zend_resource *rsrc TSRMLS_DC)
 void __cdecl sqlsrv_stmt_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
 #endif
 {
-
 	LOG_FUNCTION("sqlsrv_stmt_dtor");
 	
 	// get the structure
@@ -1672,7 +1671,7 @@ void __cdecl sqlsrv_stmt_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
 
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-#if RESOURCE_TABLE_PERSISTENCY || RESOURCE_TABLE_CUSTOM 
+#if   RESOURCE_TABLE_CUSTOM 
 		bool stmt_resource_persistency = true;
 #else
 		bool stmt_resource_persistency = false;
@@ -1688,17 +1687,12 @@ void __cdecl sqlsrv_stmt_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
 		sqlsrv_free(rsrc);
 #else
 
-		if (stmt->conn != nullptr)
-		{
-
-
-			int zr = static_cast<ss_sqlsrv_conn*>(stmt->conn)->remove_statement_handle((zend_ulong)stmt->conn_index);
-			if (zr == FAILURE) {
-				LOG(SEV_ERROR, "Failed to remove statement reference from the connection");
-			}
-
-			stmt->conn = nullptr;
+		int zr = static_cast<ss_sqlsrv_conn*>(stmt->conn)->remove_statement_handle((zend_ulong)stmt->conn_index);
+		if (zr == FAILURE) {
+			LOG(SEV_ERROR, "Failed to remove statement reference from the connection");
 		}
+
+		stmt->conn = nullptr;
 
 		stmt->~ss_sqlsrv_stmt();
 		sqlsrv_free(stmt);
@@ -1737,19 +1731,12 @@ void __cdecl sqlsrv_stmt_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
 
 PHP_FUNCTION( sqlsrv_free_stmt )
 {
-	//PHP7 Port
-#if PHP_MAJOR_VERSION >= 7
-#if RESOURCE_TABLE_CUSTOM == 0
-	//666 
-	RETURN_TRUE;
-#endif
-#else
+	LOG_FUNCTION("sqlsrv_free_stmt");
+#if PHP_MAJOR_VERSION < 7
 	SQLSRV_UNUSED(return_value_used);
 	SQLSRV_UNUSED(this_ptr);
 	SQLSRV_UNUSED(return_value_ptr);
 #endif
-
-    LOG_FUNCTION( "sqlsrv_free_stmt" );
 
     zval* stmt_r = NULL;
     ss_sqlsrv_stmt* stmt = NULL;
@@ -1796,7 +1783,6 @@ PHP_FUNCTION( sqlsrv_free_stmt )
         stmt = static_cast<ss_sqlsrv_stmt*>( zend_fetch_resource( &stmt_r TSRMLS_CC, -1, ss_sqlsrv_stmt::resource_name, NULL, 
                                                                   1, ss_sqlsrv_stmt::descriptor ));
 #endif
-        
         if( stmt == NULL ) 
 		{
 
@@ -1806,11 +1792,7 @@ PHP_FUNCTION( sqlsrv_free_stmt )
         // delete the resource from Zend's master list, which will trigger the statement's destructor
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		// We didn`t register our resource dtors  to avoid CV optimisations
-		// therefore here we clean em manually , look at sqlsrv_close which does same thing for conn objects
-		//666 sqlsrv_stmt_dtor(Z_RES_P(stmt_r));
-		int zr = core::sqlsrv_zend_hash_index_del(&(RESOURCE_TABLE), Z_RES_P(stmt_r)->handle);
-		
+		int zr = ss::remove_resource(sqlsrv_stmt_dtor, Z_RES_P(stmt_r), &(RESOURCE_TABLE), true);
 
         if( zr == FAILURE ) 
 		{

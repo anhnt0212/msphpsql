@@ -135,7 +135,7 @@ bool is_streamable_type( SQLINTEGER sql_type );
 sqlsrv_stmt::sqlsrv_stmt( sqlsrv_conn* c, SQLHANDLE handle, error_callback e, void* drv TSRMLS_DC ) :
     sqlsrv_context( handle, SQL_HANDLE_STMT, e, drv, SQLSRV_ENCODING_DEFAULT
 		#if PHP_MAJOR_VERSION >= 7
-#if RESOURCE_TABLE_PERSISTENCY || RESOURCE_TABLE_CUSTOM
+#if RESOURCE_TABLE_CUSTOM
 		, true /*persistency*/
 #else
 		, false /*persistency*/
@@ -328,8 +328,11 @@ sqlsrv_stmt* core_sqlsrv_create_stmt( sqlsrv_conn* conn, driver_stmt_factory stm
     try {
 		
         core::SQLAllocHandle( SQL_HANDLE_STMT, *conn, &stmt_h TSRMLS_CC );
+		auto test = stmt_h;
 		
-        stmt = stmt_factory( conn, stmt_h, err, driver TSRMLS_CC );
+
+
+		stmt = stmt_factory( conn, stmt_h, err, driver TSRMLS_CC );
         stmt->conn = conn;
 
         // handle has been set in the constructor of ss_sqlsrv_stmt, so we set it to NULL to prevent a double free 

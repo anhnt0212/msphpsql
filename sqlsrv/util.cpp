@@ -426,7 +426,8 @@ sqlsrv_error_const* get_error_message( unsigned int sqlsrv_error_code ) {
 // Formats an error message and finally writes it to the php log.
 void ss_sqlsrv_log( unsigned int severity TSRMLS_DC, const char* msg, va_list* print_args )
 {
-    if(( severity & SQLSRV_G( log_severity )) && ( SQLSRV_G( current_subsystem ) & SQLSRV_G( log_subsystems ))) {
+    if(( severity & SQLSRV_G( log_severity )) && ( SQLSRV_G( current_subsystem ) & SQLSRV_G( log_subsystems ))) 
+	{
 
         DWORD rc = FormatMessage( FORMAT_MESSAGE_FROM_STRING, msg, 0, 0, log_msg, LOG_MSG_SIZE, print_args );
     

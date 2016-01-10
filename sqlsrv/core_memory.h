@@ -17,13 +17,13 @@
 // Centralized location to interact with memory 
 // As new tcMalloc/jeMalloc inspired Zend MM is too tight 
 // It is to easy to get a heap corruption without even seeing a corruption message unlike previous PHP memory message
-// if you even once mix persistent mallocs and nonpersitent frees or vice versa
+// if you even once mix persistent mallocs and nonpersitent frees or vice versa or get reference counting wrong
 //
 // 1. Every malloc/free/realloc in the project are done here
 // 2. Added persistency flags to all allocation functions, STL allocator class and smart pointer classes
 // 3. Added debug utility functionality such as programatic memory breakpoints and overriding CRT malloc/frees
 // 4. Added  a commented out primitive heap verifier ( basically a heap walker ) and programatic memory breakpoints function
-//    for troubleshooting corruptions
+//    for troubleshooting Zend heap corruptions
 // 5. The only memory related class which is not here is sqlsrv_allocator in core_sqlsrv.h , which is an STL allocator
 //    calling memory allocation functions in this file.
 //
@@ -167,24 +167,15 @@ inline void hook_crt_malloc()
 // Resource table
 //*********************************************************************************************************************************
 // We tried 2 different resource tables as well as our custom one,  
-// For production , you should use EG(regular_list) : RESOURCE_TABLE_CUSTOM=0 & RESOURCE_TABLE_PERSISTENCY=0
 #if PHP_MAJOR_VERSION >= 7
 
-#define RESOURCE_TABLE_CUSTOM 0 // Are we using Zend regular_list or persistent_list or own custom one
-#define RESOURCE_TABLE_PERSISTENCY 0 // Zend memory or CRT memory
-
+#define RESOURCE_TABLE_CUSTOM 0 // Are we using one Zend regular_list or own custom one
 #define RESOURCE_TABLE_INITIAL_SIZE 256
 
-// When I tried different custom static data structures I was unable to return resources to callers in php 
-// such as sqlsrv_connect and sqlsrv_prepare
 #if RESOURCE_TABLE_CUSTOM	
 #define RESOURCE_TABLE (SQLSRV_G(resources))
 #else
-#if RESOURCE_TABLE_PERSISTENCY 
-#define  RESOURCE_TABLE EG(persistent_list)
-#else				
 #define  RESOURCE_TABLE EG(regular_list)
-#endif
 #endif		
 
 #endif

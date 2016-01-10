@@ -798,7 +798,21 @@ namespace ss {
 #endif
 	}
 
-	inline zend_resource* zend_register_resource( void* rsrc_pointer, int rsrc_type, char* rsrc_name)
+
+	inline int remove_resource(rsrc_dtor_func_t dtor, zend_resource* resource, HashTable *ht, bool remove_ref = false)
+	{
+#if PHP_MAJOR_VERSION >= 7
+		if (remove_ref)
+		{
+			GC_REFCOUNT(resource)--;
+		}
+		return zend_list_close(resource);
+#else
+		return  zend_hash_index_del(ht, resource->handle);
+#endif
+	}
+
+	inline zend_resource* zend_register_resource( void* rsrc_pointer, int rsrc_type, char* rsrc_name, bool add_ref = false)
 	{
 #if RESOURCE_TABLE_CUSTOM 
 		zval* zv = NULL;
@@ -811,12 +825,11 @@ namespace ss {
 			index = 1;
 		}
 		
-		sqlsrv_malloc_resource(&zv_res, index, rsrc_pointer, rsrc_type, RESOURCE_TABLE_PERSISTENCY ? true : false);
+		sqlsrv_malloc_resource(&zv_res, index, rsrc_pointer, rsrc_type, true);
 
 		zv = zend_hash_index_add_new(&RESOURCE_TABLE, index, &zv_res);
 
 		// make it non ref counted to avoid to be cleaned by i_free_compiled_variables when it clears CV table
-		// this work around also causes a mem leak at the moment
 		make_zval_non_refcounted(zv);
 		
 		if (zv == NULL)
@@ -836,24 +849,23 @@ namespace ss {
 			index = 1;
 		}
 
-		sqlsrv_malloc_resource(&zv_res, index, rsrc_pointer, rsrc_type, RESOURCE_TABLE_PERSISTENCY ? true : false);
+		sqlsrv_malloc_resource(&zv_res, index, rsrc_pointer, rsrc_type);
 
 		zv = zend_hash_index_add_new(&RESOURCE_TABLE, index, &zv_res);
-
-		// make it non ref counted to avoid to be cleaned by i_free_compiled_variables when it clears CV table
-		// this work around also causes a mem leak at the moment
-#if _DEBUG
-		//make_zval_non_refcounted(zv);
-#endif
 
 		if (zv == NULL)
 		{
 			throw ss::SSException();
 		}
 
+		// We want to increment the reference counter particularly for statement resources
+		// to prevent that destructors being called before request shutdown
+		if (add_ref)
+		{
+			GC_REFCOUNT(Z_RES_P(zv))++;
+		}
+
 		return Z_RES_P(zv);
-		//auto ret = ::zend_register_resource(rsrc_pointer, rsrc_type);
-		//return ret;
 #endif
 	}
 #else
