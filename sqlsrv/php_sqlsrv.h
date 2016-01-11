@@ -70,7 +70,6 @@ typedef int socklen_t;
 #include "php_ini.h"
 #include "ext/standard/php_standard.h"
 #include "ext/standard/info.h"
-
 #include <algorithm>
 
 #pragma warning(pop)
@@ -93,7 +92,7 @@ typedef int socklen_t;
 //*********************************************************************************************************************************
 namespace SSConstants
 {
-	const std::size_t MAX_CONNECTION_STATEMENTS = 4096;
+	const std::size_t MAX_CONNECTION_STATEMENTS = 32;
 	const std::size_t SQLSRV_ENCODING_COUNT = 3;
 	const std::size_t MAX_IANA_SIZE = 256;
 }
@@ -165,15 +164,22 @@ PHP_FUNCTION(sqlsrv_server_info);
 struct ss_sqlsrv_conn : sqlsrv_conn
 {
 #if PHP_MAJOR_VERSION >= 7
-#if RESOURCE_TABLE_CUSTOM
-	long stmts[MAX_CONNECTION_STATEMENTS];
-	int stmts_pointer;
-#else
-	HashTable*     stmts;
+	zend_resource* zend_handle;
 #endif
-#else
-	HashTable*     stmts;
-#endif
+	struct stmt_entry
+	{
+		long stmt_handle;
+		bool used;
+
+		stmt_entry()
+		{
+			stmt_handle = -1;
+			used = false;
+		}
+	};
+
+	stmt_entry stmts_list[SSConstants::MAX_CONNECTION_STATEMENTS];
+
     bool           date_as_string;
     bool           in_transaction;     // flag set when inside a transaction and used for checking validity of tran API calls
 
@@ -187,31 +193,42 @@ struct ss_sqlsrv_conn : sqlsrv_conn
 	ss_sqlsrv_conn(SQLHANDLE h, error_callback e, void* drv) :
 		sqlsrv_conn(h, e, drv, SQLSRV_ENCODING_SYSTEM TSRMLS_CC),
 #if PHP_MAJOR_VERSION >= 7
-#if RESOURCE_TABLE_CUSTOM
-		stmts_pointer{ 0 },
-#else
-		stmts(NULL),
-#endif
-#else
-		stmts(NULL),
+		zend_handle(nullptr),
 #endif
         date_as_string( false ),
         in_transaction( false )
     {
     }
 
+#if PHP_MAJOR_VERSION >= 7
+	void set_zend_handle(zend_resource* handle)
+	{
+		zend_handle = handle;
+	}
+
+	int get_next_stmt_list_index()
+	{
+		for (std::size_t i{ 0 }; i < SSConstants::MAX_CONNECTION_STATEMENTS; i++)
+		{
+			if (stmts_list[i].used == false)
+			{
+				return i;
+			}
+		}
+		//We should never get here
+		return -1;
+	}
+#endif
+
 	int add_statement_handle(long stmt_res_handle)
 	{
 		int next_index = -1;
 #if PHP_MAJOR_VERSION >= 7
-#if RESOURCE_TABLE_CUSTOM
-		next_index = stmts_pointer;
-		stmts[next_index] = stmt_res_handle;
-		stmts_pointer++;
-#else
-		next_index = zend_hash_next_free_element(this->stmts);
-		core::sqlsrv_zend_hash_index_update(*this, this->stmts, next_index, &stmt_res_handle, sizeof(long));
-#endif
+		next_index = get_next_stmt_list_index();
+		stmts_list[next_index].stmt_handle = stmt_res_handle;
+		stmts_list[next_index].used = true;
+
+		increment_resource_refcount(zend_handle);
 #else
 		next_index = zend_hash_next_free_element(this->stmts);
 		core::sqlsrv_zend_hash_index_update(*this, this->stmts, next_index, &stmt_res_handle, sizeof(long));
@@ -219,16 +236,17 @@ struct ss_sqlsrv_conn : sqlsrv_conn
 		return next_index;
 	}
 
-#if RESOURCE_TABLE_CUSTOM == 0
 	int remove_statement_handle(zend_ulong index)
 	{
-		if (stmts )
-		{
-			  return ::zend_hash_index_del(stmts, index);
-		}
-		return -1;
-	}
+		int ret_val = 0;
+#if PHP_MAJOR_VERSION >= 7
+		stmts_list[index].used = false;
+		decrement_resource_refcount(zend_handle);
+#else
+		ret_val = ::zend_hash_index_del(stmts, index);
 #endif
+		return ret_val;
+	}
 };
 
 // resource destructor
@@ -779,66 +797,25 @@ namespace ss {
 
 	inline void *zend_fetch_resource(zend_resource *res, const char *resource_type_name, int resource_type)
 	{
-#if RESOURCE_TABLE_CUSTOM 
-		if (resource_type == res->type) 
-		{
-			return res->ptr;
-		}
-
-		if (resource_type_name) 
-		{
-			const char *space;
-			const char *class_name = get_active_class_name(&space);
-			zend_error(E_WARNING, "%s%s%s(): supplied resource is not a valid %s resource", class_name, space, get_active_function_name(), resource_type_name);
-		}
-
-		return NULL;
-#else
 		return ::zend_fetch_resource(res, resource_type_name, resource_type);
-#endif
 	}
 
 
-	inline int remove_resource(rsrc_dtor_func_t dtor, zend_resource* resource, HashTable *ht, bool remove_ref = false)
+	inline int remove_resource(rsrc_dtor_func_t dtor, zend_resource* resource, HashTable *ht)
 	{
 #if PHP_MAJOR_VERSION >= 7
-		if (remove_ref)
-		{
-			GC_REFCOUNT(resource)--;
-		}
+		decrement_resource_refcount(resource);
+		// In PHP7 unlike previous versions, the difference between zend_list_close and zend_hash_index_del
+		// is that zend_list_close doesn`t remove the reference , therefore with zend_hash_index_del
+		// our resources will be closed by the GC
 		return zend_list_close(resource);
 #else
 		return  zend_hash_index_del(ht, resource->handle);
 #endif
 	}
 
-	inline zend_resource* zend_register_resource( void* rsrc_pointer, int rsrc_type, char* rsrc_name, bool add_ref = false)
+	inline zend_resource* zend_register_resource( void* rsrc_pointer, int rsrc_type, char* rsrc_name)
 	{
-#if RESOURCE_TABLE_CUSTOM 
-		zval* zv = NULL;
-		int index = -1;
-		zval zv_res;
-
-		index = zend_hash_next_free_element(&RESOURCE_TABLE);
-		if (index == 0)
-		{
-			index = 1;
-		}
-		
-		sqlsrv_malloc_resource(&zv_res, index, rsrc_pointer, rsrc_type, true);
-
-		zv = zend_hash_index_add_new(&RESOURCE_TABLE, index, &zv_res);
-
-		// make it non ref counted to avoid to be cleaned by i_free_compiled_variables when it clears CV table
-		make_zval_non_refcounted(zv);
-		
-		if (zv == NULL)
-		{
-			throw ss::SSException();
-		}
-		
-		return Z_RES_P(zv);
-#else
 		zval* zv = NULL;
 		int index = -1;
 		zval zv_res;
@@ -860,13 +837,9 @@ namespace ss {
 
 		// We want to increment the reference counter particularly for statement resources
 		// to prevent that destructors being called before request shutdown
-		if (add_ref)
-		{
-			GC_REFCOUNT(Z_RES_P(zv))++;
-		}
+		increment_resource_refcount(Z_RES_P(zv));
 
 		return Z_RES_P(zv);
-#endif
 	}
 #else
 	inline void zend_register_resource(__out zval* rsrc_result, void* rsrc_pointer, int rsrc_type, char* rsrc_name)

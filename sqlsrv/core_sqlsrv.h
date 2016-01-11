@@ -2018,23 +2018,14 @@ namespace core {
 	template <typename Statement>
 	sqlsrv_stmt* allocate_stmt( sqlsrv_conn* conn, SQLHANDLE h, error_callback e, void* driver TSRMLS_DC)
 	{
-#if RESOURCE_TABLE_CUSTOM
-		return new ( sqlsrv_malloc( sizeof( Statement ), true)) Statement( conn, h, e, driver TSRMLS_CC);
-#else
 		return new (sqlsrv_malloc(sizeof(Statement), false)) Statement(conn, h, e, driver TSRMLS_CC);
-#endif
 	}
 
 	template <typename Connection>
 	sqlsrv_conn* allocate_conn( SQLHANDLE h, error_callback e, void* driver TSRMLS_DC)
 	{
 #if PHP_MAJOR_VERSION >= 7
-#if RESOURCE_TABLE_CUSTOM
-		return new ( sqlsrv_malloc( sizeof( Connection ), true)) Connection( h, e, driver TSRMLS_CC);
-#else
-
 		return new (sqlsrv_malloc(sizeof(Connection), false)) Connection(h, e, driver TSRMLS_CC);
-#endif
 #else
 		return new (sqlsrv_malloc(sizeof(Connection))) Connection(h, e, driver);
 #endif

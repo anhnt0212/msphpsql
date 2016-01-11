@@ -248,51 +248,6 @@ zend_module_entry g_sqlsrv_module_entry =
     STANDARD_MODULE_PROPERTIES_EX
 };
 
-#if PHP_MAJOR_VERSION >= 7
-void __cdecl sqlsrv_resource_list_dtor(zval* val)
-{
-#if RESOURCE_TABLE_CUSTOM
-	zend_resource* resource = Z_RES_P(val);
-	if (resource)
-	{
-		if (resource->type == ss_sqlsrv_conn::descriptor)
-		{
-			sqlsrv_conn_dtor(resource);
-		}
-		else if (resource->type == ss_sqlsrv_stmt::descriptor)
-		{
-			sqlsrv_stmt_dtor(resource);
-		}
-	}
-#endif
-}
-
-// Called in MSHUTDOWN to clean all conn and stmt resources we have used
-// Will clear resource in sqlsrv_close not called
-void sqlsrv_close_resource_list()
-{
-#if RESOURCE_TABLE_CUSTOM
-	HashTable* resources = &RESOURCE_TABLE;
-	uint32_t count = resources->nNumOfElements;
-
-	// Delete the entries, that will also call the destructors in reverse order
-	// We first want to clear stmts then the connection 
-	// Otherwise first invalidating conn handle is invalidating statement handles 
-	// leading to access violations
-	for (int i = 1 ; i <= count; i--)
-	{
-		// Delete only each connection 
-		// Conn dtors will close the statements
-		if (resources->arData[i].val.value.res->type == ss_sqlsrv_conn::descriptor)
-		{
-			core::sqlsrv_zend_hash_index_del(resources, resources->arData[i].val.value.res->handle);
-		}
-	}
-
-#endif
-}
-#endif
-
 // Module initialization
 // This function is called once per execution of the Zend engine
 // We use it to:
@@ -314,14 +269,6 @@ PHP_MINIT_FUNCTION(sqlsrv)
     core_sqlsrv_register_logger( ss_sqlsrv_log );
 
 	LOG_FUNCTION("PHP_MINIT_FUNCTION for php_sqlsrv");
-
-#if PHP_MAJOR_VERSION >= 7
-#if RESOURCE_TABLE_CUSTOM
-	//resource_table = sqlsrv_malloc_hashtable(RESOURCE_TABLE, true);
-	zend_hash_init(&(RESOURCE_TABLE), RESOURCE_TABLE_INITIAL_SIZE, NULL ,  sqlsrv_resource_list_dtor , true);
-	//mark_hashtable_as_initialised(&(RESOURCE_TABLE));
-#endif
-#endif
 
     // our global variables are initialized in the RINIT function
 #if defined(ZTS)
@@ -357,15 +304,7 @@ PHP_MINIT_FUNCTION(sqlsrv)
 
     // register connection resource
 	// sqlsrv_conn_dtor
-#if PHP_MAJOR_VERSION >= 7
-#if RESOURCE_TABLE_CUSTOM 
-	ss_sqlsrv_conn::descriptor = ss::zend_register_list_destructors_ex(NULL, NULL, "SQL Server Connection", module_number);
-#else
 	ss_sqlsrv_conn::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_conn_dtor, NULL, "SQL Server Connection", module_number);
-#endif
-#else
-	ss_sqlsrv_conn::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_conn_dtor, NULL, "SQL Server Connection", module_number);
-#endif
 
     if( ss_sqlsrv_conn::descriptor == FAILURE ) {
         LOG( SEV_ERROR, "%1!s!: connection resource registration failed", _FN_ );
@@ -374,15 +313,7 @@ PHP_MINIT_FUNCTION(sqlsrv)
     
     // register statement resources
 	// sqlsrv_stmt_dtor
-#if PHP_MAJOR_VERSION >= 7
-#if RESOURCE_TABLE_CUSTOM 
-	ss_sqlsrv_stmt::descriptor = ss::zend_register_list_destructors_ex(NULL, NULL, "SQL Server Statement", module_number);
-#else
 	ss_sqlsrv_stmt::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_stmt_dtor, NULL, "SQL Server Statement", module_number);
-#endif
-#else
-    ss_sqlsrv_stmt::descriptor = ss::zend_register_list_destructors_ex(sqlsrv_stmt_dtor, NULL, "SQL Server Statement", module_number );
-#endif
 
     if( ss_sqlsrv_stmt::descriptor == FAILURE ) {
         LOG( SEV_ERROR, "%1!s!: statement resource regisration failed", _FN_ );
@@ -776,31 +707,12 @@ PHP_MSHUTDOWN_FUNCTION(sqlsrv)
 {
 	LOG_FUNCTION("PHP_MSHUTDOWN_FUNCTION for php_sqlsrv");
 	SQLSRV_UNUSED(type);
-#if RESOURCE_TABLE_CUSTOM
-	
-   
-    
-    UNREGISTER_INI_ENTRIES();
-	
-    // clean up the list of sqlsrv errors
-	bool hash_tables_persistency = true;
-	clean_hashtable(g_ss_errors_ht, hash_tables_persistency);
-	clean_hashtable(g_ss_warnings_to_ignore_ht, hash_tables_persistency);
-	clean_hashtable(g_ss_encodings_ht, hash_tables_persistency);
-
-	sqlsrv_close_resource_list();
-	
-    core_sqlsrv_mshutdown( *g_henv_cp, *g_henv_ncp );
-
-    if( php_unregister_url_stream_wrapper( SQLSRV_STREAM_WRAPPER TSRMLS_CC ) == FAILURE ) 
-	{
-        return FAILURE;
-    }
-#else
+	UNREGISTER_INI_ENTRIES();
 	// clean up the list of sqlsrv errors
 	bool hash_tables_persistency = true;
 	clean_hashtable(g_ss_errors_ht, hash_tables_persistency);
 	clean_hashtable(g_ss_warnings_to_ignore_ht, hash_tables_persistency);
+
 #if PHP_MAJOR_VERSION < 7
 	clean_hashtable(g_ss_encodings_ht, hash_tables_persistency);
 #endif
@@ -810,7 +722,6 @@ PHP_MSHUTDOWN_FUNCTION(sqlsrv)
 	if (php_unregister_url_stream_wrapper(SQLSRV_STREAM_WRAPPER TSRMLS_CC) == FAILURE) {
 		return FAILURE;
 	}
-#endif
 	return SUCCESS;
 	LOG_FUNCTION_EXIT("PHP_MSHUTDOWN_FUNCTION for php_sqlsrv");
 }

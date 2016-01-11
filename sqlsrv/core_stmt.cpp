@@ -135,11 +135,7 @@ bool is_streamable_type( SQLINTEGER sql_type );
 sqlsrv_stmt::sqlsrv_stmt( sqlsrv_conn* c, SQLHANDLE handle, error_callback e, void* drv TSRMLS_DC ) :
     sqlsrv_context( handle, SQL_HANDLE_STMT, e, drv, SQLSRV_ENCODING_DEFAULT
 		#if PHP_MAJOR_VERSION >= 7
-#if RESOURCE_TABLE_CUSTOM
-		, true /*persistency*/
-#else
 		, false /*persistency*/
-#endif
 		#endif
 		),
     conn( c ),

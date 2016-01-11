@@ -100,11 +100,7 @@ sqlsrv_conn* core_sqlsrv_connect( sqlsrv_context& henv_cp, sqlsrv_context& henv_
     SQLRETURN r;
     std::string conn_str;
     conn_str.reserve( DEFAULT_CONN_STR_LEN );
-#if RESOURCE_TABLE_CUSTOM == 0
 	sqlsrv_malloc_auto_ptr<sqlsrv_conn, false> conn;
-#else
-    sqlsrv_malloc_auto_ptr<sqlsrv_conn, true> conn;
-#endif
     sqlsrv_malloc_auto_ptr<wchar_t> wconn_string;
     unsigned int wconn_len = 0;
 
@@ -358,11 +354,7 @@ void core_sqlsrv_close( sqlsrv_conn* conn TSRMLS_DC )
     // free the connection handle
     conn->invalidate();
 #if PHP_MAJOR_VERSION >= 7
-#if RESOURCE_TABLE_CUSTOM
-	sqlsrv_free(conn, true);
-#else
 	sqlsrv_free(conn);
-#endif
 #else
 	sqlsrv_free(conn);
 #endif

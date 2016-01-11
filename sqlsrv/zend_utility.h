@@ -8,7 +8,7 @@
 #include <php_version.h>
 
 #include <php.h>
-// DONT INCLUDE IN RELEASE MODE AS IT IS TAKING AGES WITH THIS HEADER
+// DON`T INCLUDE IN RELEASE MODE AS IT IS TAKING AGES WITH THIS HEADER
 // ALSO CHANGED A FEW IOSTREAM INCLUSIONS IN ORIGINAL SQLSRV CPP FILES TO IOSFWD
 #ifdef _DEBUG    
 #include <iostream>
@@ -46,17 +46,25 @@ namespace // Following MS`s anonymous namespace usage, not to pollute the global
 inline zend_resource* zend_list_find(HashTable* resources, long res_handle, int type)
 {
 	zend_resource* ret = NULL;
-	auto temp = resources->arData[res_handle].val.value.res;
+	zend_hash_internal_pointer_reset(resources);
 
-	if (!temp)
+	for (zend_hash_internal_pointer_reset(resources);
+	zend_hash_has_more_elements(resources) == SUCCESS;
+		zend_hash_move_forward(resources))
 	{
-		php_error(E_ERROR, "SQLSRV can not find %d type resource with handle %d ", type , res_handle);
-		return ret;
-	}
+		zval* element = NULL;
+		element = ::zend_hash_get_current_data(resources);
+		if (element)
+		{
+			auto res = Z_RES_P(element);
+			if (res->handle == res_handle && res->type == type)
+			{
+				ret = res;
+				break;
+			}
+		}
 
-	if (temp->type == type)
-	{
-		ret = temp;
+
 	}
 
 	return ret;
@@ -178,4 +186,4 @@ inline void dump_zend_engine_memory_usage()
 #endif // _DEBUG
 
 #endif // #if PHP_MAJOR_VERSION >= 7
-#endif // #ifndef __ZEND_EX__
+#endif // #ifndef __ZEND_UTILITY__

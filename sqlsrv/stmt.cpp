@@ -1661,7 +1661,6 @@ void __cdecl sqlsrv_stmt_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
 #endif
 {
 	LOG_FUNCTION("sqlsrv_stmt_dtor");
-	
 	// get the structure
 	ss_sqlsrv_stmt *stmt = static_cast<ss_sqlsrv_stmt*>(rsrc->ptr);
 #if PHP_MAJOR_VERSION >= 7
@@ -1671,25 +1670,13 @@ void __cdecl sqlsrv_stmt_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
 
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-#if   RESOURCE_TABLE_CUSTOM 
-		bool stmt_resource_persistency = true;
-#else
 		bool stmt_resource_persistency = false;
-#endif
-#if RESOURCE_TABLE_CUSTOM
-		clean_hashtable((stmt->param_input_strings), stmt_resource_persistency);
-		clean_hashtable((stmt->param_streams), stmt_resource_persistency);
-		clean_hashtable((stmt->param_datetime_buffers), stmt_resource_persistency);
-		clean_hashtable((stmt->output_params), stmt_resource_persistency);
-		clean_hashtable((stmt->field_cache), stmt_resource_persistency);
-		stmt->~ss_sqlsrv_stmt();
-		sqlsrv_free(stmt, stmt_resource_persistency);
-		sqlsrv_free(rsrc);
-#else
-
-		int zr = static_cast<ss_sqlsrv_conn*>(stmt->conn)->remove_statement_handle((zend_ulong)stmt->conn_index);
-		if (zr == FAILURE) {
-			LOG(SEV_ERROR, "Failed to remove statement reference from the connection");
+		if (stmt->conn)
+		{
+			int zr = static_cast<ss_sqlsrv_conn*>(stmt->conn)->remove_statement_handle((zend_ulong)stmt->conn_index);
+			if (zr == FAILURE) {
+				LOG(SEV_ERROR, "Failed to remove statement reference from the connection");
+			}
 		}
 
 		stmt->conn = nullptr;
@@ -1698,7 +1685,7 @@ void __cdecl sqlsrv_stmt_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
 		sqlsrv_free(stmt);
 		stmt = nullptr;
 		rsrc->ptr = NULL;
-#endif
+
 #else
 		stmt->~ss_sqlsrv_stmt();
 		sqlsrv_free(stmt);
@@ -1792,7 +1779,7 @@ PHP_FUNCTION( sqlsrv_free_stmt )
         // delete the resource from Zend's master list, which will trigger the statement's destructor
 		//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
-		int zr = ss::remove_resource(sqlsrv_stmt_dtor, Z_RES_P(stmt_r), &(RESOURCE_TABLE), true);
+		int zr = ss::remove_resource(sqlsrv_stmt_dtor, Z_RES_P(stmt_r), &(RESOURCE_TABLE));
 
         if( zr == FAILURE ) 
 		{

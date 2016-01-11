@@ -21,7 +21,7 @@
 //
 // 1. Every malloc/free/realloc in the project are done here
 // 2. Added persistency flags to all allocation functions, STL allocator class and smart pointer classes
-// 3. Added debug utility functionality such as programatic memory breakpoints and overriding CRT malloc/frees
+// 3. Added debug utility functionality such as programatic virtual memory protection and hw breakpoints for detecting bad writes and overriding CRT malloc/frees
 // 4. Added  a commented out primitive heap verifier ( basically a heap walker ) and programatic memory breakpoints function
 //    for troubleshooting Zend heap corruptions
 // 5. The only memory related class which is not here is sqlsrv_allocator in core_sqlsrv.h , which is an STL allocator
@@ -105,7 +105,7 @@ ZEND_API void full_mem_check()
 */
 
 #if _DEBUG
-inline unsigned long insert_data_breakpoint(void* address, DWORD protectionMode = PAGE_EXECUTE)
+inline unsigned long virtual_memory_protect(void* address, DWORD protectionMode = PAGE_EXECUTE)
 {
 	SYSTEM_INFO sysInfo;
 	GetSystemInfo(&sysInfo);
@@ -113,6 +113,65 @@ inline unsigned long insert_data_breakpoint(void* address, DWORD protectionMode 
 	DWORD lastProtectValue = 0;
 	VirtualProtect(address, pageSize, protectionMode, &lastProtectValue);
 	return lastProtectValue;
+}
+
+/*
+	Original source code : https://github.com/mmorearty/hardware-breakpoints
+	We only converted to 1 time function
+*/
+inline int insert_memory_breakpoint(void* address, int len, bool write = true)
+{
+	CONTEXT cxt;
+	HANDLE thisThread = GetCurrentThread();
+
+	auto SetBits = [&](unsigned long& dw, int lowBit, int bits, int newValue)
+	{
+		int mask = (1 << bits) - 1; // e.g. 1 becomes 0001, 2 becomes 0011, 3 becomes 0111
+		dw = (dw & ~(mask << lowBit)) | (newValue << lowBit);
+	};
+
+	switch (len)
+	{
+		case 1: len = 0; break;
+		case 2: len = 1; break;
+		case 4: len = 3; break;
+		default: assert(false); // invalid length
+	}
+
+	// The only registers we care about are the debug registers
+	cxt.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+
+	// Read the register values
+	if (!GetThreadContext(thisThread, &cxt))
+		assert(false);
+
+	// Find an available hardware register
+	int breakpoint_register_index = -1;
+	for (breakpoint_register_index = 0; breakpoint_register_index < 4; ++breakpoint_register_index)
+	{
+		if ((cxt.Dr7 & (1 << (breakpoint_register_index * 2))) == 0)
+			break;
+	}
+	assert(m_index < 4); // All hardware breakpoint registers are already being used
+
+	switch (breakpoint_register_index)
+	{
+		case 0: cxt.Dr0 = (DWORD)address; break;
+		case 1: cxt.Dr1 = (DWORD)address; break;
+		case 2: cxt.Dr2 = (DWORD)address; break;
+		case 3: cxt.Dr3 = (DWORD)address; break;
+		default: assert(false); // m_index has bogus value
+	}
+
+	SetBits(cxt.Dr7, 16 + (breakpoint_register_index * 4), 2, write?3:1);
+	SetBits(cxt.Dr7, 18 + (breakpoint_register_index * 4), 2, len);
+	SetBits(cxt.Dr7, breakpoint_register_index * 2, 1, 1);
+
+	// Write out the new debug registers
+	if (!SetThreadContext(thisThread, &cxt))
+		assert(false);
+
+	return breakpoint_register_index;
 }
 #endif
 
@@ -166,17 +225,10 @@ inline void hook_crt_malloc()
 //*********************************************************************************************************************************
 // Resource table
 //*********************************************************************************************************************************
-// We tried 2 different resource tables as well as our custom one,  
 #if PHP_MAJOR_VERSION >= 7
 
-#define RESOURCE_TABLE_CUSTOM 0 // Are we using one Zend regular_list or own custom one
 #define RESOURCE_TABLE_INITIAL_SIZE 256
-
-#if RESOURCE_TABLE_CUSTOM	
-#define RESOURCE_TABLE (SQLSRV_G(resources))
-#else
-#define  RESOURCE_TABLE EG(regular_list)
-#endif		
+#define RESOURCE_TABLE EG(regular_list)
 
 #endif
 
@@ -200,16 +252,14 @@ inline void mark_hashtable_as_initialised(HashTable* ht)
 	(ht)->u.flags |= HASH_FLAG_INITIALIZED;
 }
 
-inline void make_zval_non_refcounted(zval* zv)
+inline void increment_resource_refcount(zend_resource* resource)
 {
-	// This one is quite important in order to avoid "compiled variable" freeing
-	Z_TYPE_INFO_P(zv) &= ~(IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+	GC_REFCOUNT(resource)++;
 }
 
-inline void make_zval_refcounted(zval* zv)
+inline void decrement_resource_refcount(zend_resource* resource)
 {
-	// This one is quite important in order to avoid "compiled variable" freeing
-	Z_TYPE_INFO_P(zv) |= ~(IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+	GC_REFCOUNT(resource)--;
 }
 
 inline void* sqlsrv_malloc(size_t size, bool persistent = false)

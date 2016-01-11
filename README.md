@@ -62,13 +62,11 @@ For your questions, please contact akin.ocal@thomsonreuters.com
    Additionaly inside core_memory.h , there is a commented out Zend memory manager heap walker code. This has been useful for us since PHP7 doesn`t provide a heap integrity
    checker unlike PHP5.X.
 
-2. We are using static memory with std::array for error and warning reporting : core_errors.h 
+2. We are using static memory with std::array for error and warning reporting (core_errors.h ). Even though we are not supporting thread safe mode of PHP7 , this part still should be thread safe as it is still declared as a Zend global.
 
-3. We added flags inside php_sqlsrv.h to switch between different resource managers : EG(regular_list) and a custom global one which is not being touched by PHP7 garbage collector. As we are still working for the custom manual resource manager, it is not advised to turn the custom one on for production environments.
+3. We also have added a new file ( zend_utility.h ) to the project which contains a few macros and functions for porting considerations and also for exploring new PHP7 engine.
 
-4. We also have added a new file ( zend_utility.h ) to the project which contains a few macros and functions for porting considerations and also for exploring new PHP7 engine.
-
-5. This port also includes Robert Johnson`s patch which we have been using and can be found at :
+4. This port also includes Robert Johnson`s patch which we have been using and can be found at :
 	
 		http://robsphp.blogspot.com/2012/06/unofficial-microsoft-sql-server-driver.html
 
