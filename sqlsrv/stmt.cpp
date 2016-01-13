@@ -30,6 +30,9 @@
 // our resource descriptor assigned in minit
 int ss_sqlsrv_stmt::descriptor = 0;
 char* ss_sqlsrv_stmt::resource_name = "ss_sqlsrv_stmt";   // not const for a reason.  see sqlsrv_stmt in php_sqlsrv.h
+#if _DEBUG
+int ss_sqlsrv_stmt::statement_counter = 0;
+#endif
 
 namespace {
 
@@ -129,6 +132,10 @@ ss_sqlsrv_stmt::ss_sqlsrv_stmt( sqlsrv_conn* c, SQLHANDLE handle, error_callback
     fetch_field_names( NULL ),
     fetch_fields_count ( 0 )
 {
+#if _DEBUG
+	ss_sqlsrv_stmt::statement_counter++;
+#endif
+	
     core_sqlsrv_set_buffered_query_limit( this, SQLSRV_G( buffered_query_limit ) TSRMLS_CC );
 }
 
@@ -136,8 +143,8 @@ ss_sqlsrv_stmt::~ss_sqlsrv_stmt( void )
 {
     if( fetch_field_names != NULL ) {
 
-        for( int i=0; i < fetch_fields_count; ++i ) {
-            
+        for( int i=0; i < fetch_fields_count; ++i ) 
+		{
             sqlsrv_free( fetch_field_names[ i ].name );
         }
         sqlsrv_free( fetch_field_names );
@@ -145,13 +152,11 @@ ss_sqlsrv_stmt::~ss_sqlsrv_stmt( void )
 
     if( params_z ) 
 	{
-		//PHP7 Port
-#if PHP_MAJOR_VERSION >= 7
+		
+#if PHP_MAJOR_VERSION < 7
 		zval_destructor(params_z);
-#else
-        zval_ptr_dtor( &params_z );
 #endif
-        params_z = NULL;
+       params_z = NULL;
     }
 }    
 
@@ -423,7 +428,8 @@ PHP_FUNCTION( sqlsrv_fetch_array )
 		
         bool result = core_sqlsrv_fetch( stmt, fetch_style, fetch_offset TSRMLS_CC );
 		
-        if( !result ) {
+        if( !result ) 
+		{
             RETURN_NULL();
         }
 		

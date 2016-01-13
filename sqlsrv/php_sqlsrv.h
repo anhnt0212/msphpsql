@@ -293,7 +293,9 @@ struct ss_sqlsrv_stmt : public sqlsrv_stmt {
     // static variables used in process_params
     static char* resource_name;                  // char because const char forces casting all over the place in ODBC functions
     static int descriptor;
-
+#if _DEBUG
+	static int statement_counter;
+#endif
 };
 
 // holds the field names for reuse by sqlsrv_fetch_array/object as keys

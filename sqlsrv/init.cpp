@@ -783,6 +783,12 @@ PHP_RSHUTDOWN_FUNCTION(sqlsrv)
     SQLSRV_UNUSED( module_number );
     SQLSRV_UNUSED( type );
 
+	//Quite useful during debugging as we want to know if request is being shutdown
+	//So we re attach to the CGI process
+#if _DEBUG
+	__debugbreak();
+#endif
+
     reset_errors( TSRMLS_C );
 
 	//PHP7 Port

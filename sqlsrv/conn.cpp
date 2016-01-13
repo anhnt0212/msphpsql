@@ -1140,7 +1140,8 @@ PHP_FUNCTION(sqlsrv_query)
 			ss_error_handler, NULL TSRMLS_CC));
 		
 		stmt->params_z = params_z;
-		if (params_z) {
+		if (params_z) 
+		{
 			//PHP7 Port
 #if PHP_MAJOR_VERSION >= 7
 			add_ref_zval(params_z);
