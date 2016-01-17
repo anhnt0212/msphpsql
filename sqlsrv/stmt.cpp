@@ -646,8 +646,6 @@ PHP_FUNCTION( sqlsrv_next_result )
         core_sqlsrv_next_result( stmt TSRMLS_CC, true );
 #endif
 
-		RETURN_FALSE;
-		
         if( stmt->past_next_result_end ) {
 
             RETURN_NULL();
