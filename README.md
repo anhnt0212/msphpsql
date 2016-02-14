@@ -21,14 +21,14 @@ Thomson Reuters FATCA Technology Team
     1. sqlsrv_connect
     2. sqlsrv_close
     3. sqlsrv_errors
-    4. sqlsrv_prepare
+    4. sqlsrv_prepare     ( not supporting parameter binding )
     5. sqlsrv_free_stmt
     6. sqlsrv_execute
     7. sqlsrv_num_field
     8. sqlsrv_next_result
-    9. sqlsrv_fetch_array ( excluding streams )
+    9. sqlsrv_fetch_array ( not supporting streams )
     10. sqlsrv_configure
-    11. sqlsrv_query
+    11. sqlsrv_query      ( not supporting parameter binding )
     12. sqlsrv_num_rows
     13. sqlsrv_field_metadata
     14. sqlsrv_client_info
@@ -55,7 +55,6 @@ in "binaries_php7_non_zts_x86" directory.
 For your questions, please contact akin.ocal@thomsonreuters.com
 
 ## Source code information
-
 
 1. We centralised all memory allocations and frees in new core_memory.h file. We also added CRT debugging features to the same header file such as programatic
    memory breakpoints, CRT memory function hooks and CRT debug heap reporting. You can turn these on by adding SQLSRV_MEM_DEBUG=1 and SQLSRV_HOOK_CRT_MALLOC=1 to your preprocessor.
